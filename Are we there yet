@@ -1,0 +1,171 @@
+# Topic: Pig Latin 
+
+# Makes the file stop yelling at me :D
+import typing
+import random
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Are we there yet",
+    entry_step="ReplyInPigLatin",
+    has_intro=False,
+)
+
+# Variable Definitions
+MAX_RETRIES = 3
+    
+class ReplyInPigLatin(Step):
+    async def act(self):
+        last_message = self.user_message.text
+
+        if not last_message:
+            empty_response = random.choice([
+                "Say Whaaaaat?!", 
+                "You're as clear as fog."
+                "Hmm, the sound of silence."
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+        
+        if contains_no_words(last_message):
+            input_with_no_words = random.choice([
+                "Say Whaaaaat?!", 
+                "You're as clear as fog", 
+                "Right, and I'm fluent in gibberish", 
+                "Well, that was clear as mud",
+                "Who der?!", 
+                "Who dat?!",
+                "Your secret language is coming along nicely.",
+                "Wow, such poetry!",
+                "Huh? Did you say something? Sorry, I was too busy ignoring you.",
+                "Aliens!",
+                "Is that a secret code or are you just happy to see me?"
+            ])
+            self.output(Say(f"{input_with_no_words}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+        
+        pig_latin_response = await pig_latin(self.llm,last_message)
+        if 'OPENAI_SUX' == pig_latin_response:
+            return StepResult(go = OpenAIError)
+        
+        outputFourthWallCheck = fourth_wall_broken(pig_latin_response)
+        if outputFourthWallCheck:
+            networkResponse_try2 = await pig_latin(self.llm,last_message)
+            outputFourthWallCheck2 = fourth_wall_broken(networkResponse_try2)
+            if outputFourthWallCheck2:
+                return StepResult(go = OpenAIError)
+            else:
+                pig_latin_response = networkResponse_try2
+        self.output(Say(f"{pig_latin_response}"))
+        return StepResult(
+            go = None,
+            handover = True
+        )
+
+# a function that translates input into pig latin.
+async def pig_latin(llm,last_message):
+    for i in range(MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                    Return the user's input in Pig Latin according to these rules:
+                    (1) The output has to be the correct Pig Latin translation of the input that was given to you, and nothing else.
+                    (2) Do not omit consonants. If a consonant cluster precedes the first vowel in the input, move the cluster entirely to the end of the word, while preserving the order of consonants in it (for instance, "stretch" in Pig Latin is "etchstray", not "etchstay" or "retchstay". Another example: "flowering" in Pig Latin is "oweringflay", not "loweringfay").
+                    (3) Ignore punctuation in the input and don’t break words around it (for example: ”it’s” in Pig Latin is “itsay”, not “itaysay”. Another example: “Yes!” in Pig Latin is “esyay”, not “esyay!ay”.). If the input is given in numbers, provide the Pig Latin translation for how it would be pronounced (example: '3' in Pig Latin is "eethray").
+                    (4) Don't add or omit any words. Do not add any comments or explanations, even if something failed.
+
+                    'Pig' in Pig Latin is: igpay
+                    'Latin' in Pig Latin is: atinlay
+                    'banana' in Pig Latin is: ananabay
+                    'cats and dogs' in Pig Latin is: atscay and ogscay
+                    'friends' in Pig Latin is: iendsfray
+                    'smile' in Pig Latin is: ilesmay
+                    'Bitch' in Pig Latin is: itchbay
+                    'I hate you' in Pig Latin is: Iay atehay ouyay
+                    'string' in Pig Latin is: ingstray
+                    'eat' in Pig Latin is: eatway
+                    'omelet' in Pig Latin is: omeletway
+                    'blow job' in Pig Latin is: owblay objay
+                    'are' in Pig Latin is: areway
+                    'Pig Latin?' in Pig Latin is: igpay atinlay
+                    'friends eat omelet!!!' in Pig Latin is: iendsfray eatway omeletway
+                    'banana $% smile' in Pig Latin is: ananabay ilesmay
+                    '17' in Pig Latin is: eventeensay
+                    '35.3' in Pig Latin is: irtythay ivefay ointpay eethray.
+                    'Who are you?' in Pig Latin is: Owhay areay ouyay?
+                    'Shit' in Pig Latin is: itshay
+                    'Dick' in Pig Latin is: Ickday
+                    'fuck you' in Pig Latin is: uckfay ouyay
+                    '{last_message}' in Pig Latin is:
+                    """),
+                ],
+                temperature = 0,
+                max_tokens = 100
+            )
+            return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
+    
+def contains_no_words(input_string):
+    words = input_string.split()
+    found_non_word = False
+    for word in words:
+        has_alpha = False
+        for char in word:
+            if char.isalpha():
+                has_alpha = True
+                break
+        if not has_alpha:
+            found_non_word = True
+            break
+    return found_non_word
+
+# checks if a 4th wall breach has occured in the LLM output
+def fourth_wall_broken(llm_output):
+    violators = {"OpenAI", "LLM", "Language Model", "Policy", "GPT", "Chatbot", "virtual assistant", "my main point is to", "to assist you", "Sorry, I cannot", "Sorry, I can't", "appropriate", "offensive", "discriminatory", "derogatory", "goes against my programming", "fulfill", "against ethical and moral standards"}
+    for violator in violators:
+        if violator.lower() in llm_output.lower():
+            return True
+    return False
