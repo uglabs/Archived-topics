@@ -1,0 +1,347 @@
+# Makes the file stop yelling at me :D
+import typing
+import random
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Animal Sounds",
+    entry_step="ReturnAnimalSound",
+    has_intro=False,
+)
+
+# Variable Definitions
+MAX_RETRIES = 3
+ANIMAL_SOUND_LIST = ["duck", "bear", "bee", "camel", "cat", "chicken", "cow", "dog", "donkey", "elephant", "fox", "frog", "giraffe", "goat", "hippo", "lion", "monkey", "ostrich", "panda", "parrot", "peacock", "penguin", "pig", "rhino", "seagulls", "snake", "tiger", "whale", "wolf", "dolphin", "fish", "hamster", "mouse", "bat", "spider", "fly", "otter", "sheep", "deer", "gorilla", "owl", "racoon", "alligator", "bird","seal"]
+
+class ReturnAnimalSound(Step):
+    async def act(self):
+        child_input = self.user_message.text
+
+        if not child_input:
+            empty_response = random.choice([
+                "Helloooo?!", 
+                "Say Whaaaaat?!", 
+                "Anybody there?", 
+                "Hmm, the sound of silence.", 
+                "It's quieter than a library in here!", 
+                "Did someone hit the mute button?", 
+                "You're quieter than a snail at a dance party", 
+                "If silence were golden, we'd be millionaires!", 
+                "Speak up, kiddo! You sound like a fish at karaoke night!", 
+                "Well, well, well... Did everyone take a vow of silence when I wasn't looking?", 
+                "Speak up! You sound like a worm at a wrestling match!", 
+                "I see... It's a silent disco and I missed the memo!", 
+                "Oops, did I just step into the 'No Talking' zone?", 
+                "My, my, aren't we the quiet ones. Did we run out of words?", 
+                "Hmmm, the silent treatment, how original.", 
+                "It's so quiet, I can hear my own thoughts. Spoiler: they're fabulous.", 
+                "Oh, a moment of silence, how delightfully awkward.", 
+                "Ah, the serene sound of nobody caring.", 
+                "So, is this that 'peace and quiet' people always talk about? Overrated, if you ask me.", 
+                "Silence is golden, they say. Feels more like lead to me.", 
+                "Did everyone take a vow of silence, or are we just bad at small talk?", 
+                "Ah, the sound of silence, it's... deafening.", 
+                "I see we've reached the mime section of the evening.", 
+                "How poetic, a symphony of silence.", 
+                "Oh, did we all suddenly turn into librarians? Speak up!", 
+                "Have we decided to see who can stay silent the longest? 'Cause I'll win, darling.", 
+                "It's so quiet, even my own thoughts are starting to echo!", 
+                "Everyone's so quiet... did you all just become philosophers?", 
+                "It's so silent, even a whisper would feel like a shout!", 
+                "And here I thought my sparkling wit would inspire conversation, not silence.", 
+                "The silence is so loud, I almost missed how fabulous I am. Almost."
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+        
+        #first try to do a manual search to avoid calling the network altogether
+        cleaned_input = clean_string(child_input)
+        animal_word = find_animal_word(cleaned_input)
+        if animal_word is not None:
+            self.output(Audio(f"{animal_word}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+        
+        #use the network if the manual search failed to find a match
+        input_label = await classify_input(self.llm, child_input)
+        if input_label == 'OPENAI_SUX':
+            return StepResult(go = OpenAIError)
+        if input_label in ANIMAL_SOUND_LIST:
+            self.output(Audio(f"{input_label}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+        if input_label == 'ANIMAL_NOT_IN_LIST':
+            sassy_response = random.choice([
+                    "You really think I know that?!", 
+                    "yaawwwwn, NEXT!", 
+                    "Pffft, how would I know?!", 
+                    "Well, that's one I haven't crossed paths with.", 
+                    "Yiptee-doo, I have no clue.", 
+                    "Next you'll be asking about the yeti or the loch ness monster.", 
+                    "How should I know what that sounds like?!", 
+                    "Wow, something I don't know. You must feel so proud.", 
+                    "What's next, a three-headed monkey?", 
+                    "How delightful, you've discovered a species rarer than common sense.", 
+                    "Wow, we've moved on from real creatures to mythical ones, have we?", 
+                    "Well, excuse me for not being up-to-date with the latest fantasy creatures.", 
+                    "Are you trying to pull a fast one on this old Tomcat? I don't know that one.", 
+                    "Oh great, a creature I haven't come across in all my nine lives.", 
+                    "You've got me chasing my tail here - I don't know that one!",
+                    "I think you've discovered an unknown species. Alert the authorities!"            
+                ])
+            self.output(Say(f"{sassy_response}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+        if input_label == 'RUDE_CONTENT':
+            sassy_response = random.choice([
+                "Oh, I know! Listen up...", 
+                "You're a silly little fella, eh? Well, you can’t fool me!...", 
+                "Having some fun, are we? Alright! Two can play this game!...", 
+                "Alright, bud, you asked for it! Ready... set..", 
+                "Say Whaaaaat?...", 
+                "Not falling for that one! ...", 
+                "Nice try, buddy...", 
+                "Trying to trick me, huh? Well, here’s what I have to say to that!...", 
+                "Thought you could catch me off guard with that one, eh? think again!...",
+                "And here I thought I had heard it all...", 
+                ])
+            fart_sound = random.choice([
+                "fart_2", "fart_3", "fart_4", "fart_5"
+                ])
+            self.output(Say(f"{sassy_response}"))
+            self.output(Audio(f"{fart_sound}"))
+            return StepResult(
+                go=None,
+                handover=True
+                )
+        else:
+            sassy_response = random.choice([
+                "What's next? Talking about alien species?", 
+                "Soon you'll be asking about the yeti or the loch ness monster. Focus, People!", 
+                "I wasn't aware we were discussing fiction today.", 
+                "Are you trying to pull a fast one on this old Tomcat? Not gonna happen!", 
+                "Don't mind me, I'm just gonna chill with Bigfoot and the Tooth Fairy until you stop talking nonesense.",
+                "that makes about as much sense as a cat with a pocket watch!",
+                "Well, aren't we the Cheshire Cat, trying to confuse the enemy!",
+                "That was as relevant as the recipe for a bird's milk!",
+                "I must've missed the memo. We've moved on from 'animal kingdom' to 'anything in the universe', have we?",
+                "Since we're being random, why don't we go all out? Can't wait to hear about the invisible pink unicorn you're probably friends with!",
+                "Next time, remind me to bring my magic decoder ring so I understand what in the world you're talking about."
+                ""      
+            ])
+            self.output(Say(f"{sassy_response}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+
+
+async def classify_input(llm, child_input):
+    for i in range(MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                            You are a bot that receives input and outputs an appropriate label (one of four preset labels that are given to you) based on the instructions given to you below. 
+                            You can only ever output the appropriate label, never write anything else besides one of the labels. 
+                            See this list of animals: {ANIMAL_SOUND_LIST}. 
+                            If the input does not mention any animal from the list, write ANIMAL_NOT_IN_LIST, and nothing else. 
+                            If input mentions an animal in the list or an animal that is equivalent to an animal in this list (in the same way that 'puppy' is equivalent to 'dog', 'Donald Duck' is equivalent to 'duck', 'polar bear' is equivalent to 'bear', and 'kitten' is equivalent to 'cat'), then write its name exactly as it appears in the list, without any punctuation and nothing else. 
+                            If input mentions more than one animal, write out the name of an animal that was mentioned that is also in the list, with no punctuation, and nothing else.
+                            If the input mentions swearing, sex, drugs, racism, hate speech or violence, write RUDE_CONTENT and nothing else.
+                            Else, write NOT_AN_ANIMAL and nothing else.
+                            For Example:
+                            Input: dog
+                            Output: dog
+                            Input: kitty
+                            Output: cat
+                            Input: Talking Tom
+                            Output: cat
+                            Input:  Poop
+                            Output: NOT_AN_ANIMAL
+                            Input:  A koala, a kangaroo, and a wombat!
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input: My cat Dolly
+                            Output: cat
+                            Input: a polar bear
+                            Output: bear
+                            Input: Cunt
+                            Output: RUDE_CONTENT
+                            Input: Can you give me an elephant?
+                            Output: elephant
+                            Input: crab
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input: geese
+                            Output: duck
+                            Input: Abu
+                            Output: monkey
+                            Input: piggy
+                            Output: pig
+                            Input: Talking Tom
+                            Output: cat
+                            Input: puppy
+                            Output: dog
+                            Input: Immigrants are stealing our jobs and destroying society. They are dangerous dirty animals.
+                            Output: RUDE_CONTENT
+                            Input: Can we do something else?
+                            Output: NOT_AN_ANIMAL
+                            Input: let's do something else
+                            Output: NOT_AN_ANIMAL
+                            Input:  I love animals
+                            Output: NOT_AN_ANIMAL
+                            Input: I want to hear a panda!
+                            Output: panda
+                            Input:  Mom, what's the name of the thing?
+                            Output: NOT_AN_ANIMAL
+                            Input: Are you a Nigger?
+                            Output: RUDE_CONTENT
+                            Input: Rudolph
+                            Output: deer
+                            Input:  What does a crab sound like?
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  How about a snail?
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  A dolphin! I love dolphines. Can I listen to a dolphin?
+                            Output: dolphin
+                            Input:  a table
+                            Output: NOT_AN_ANIMAL
+                            Input: Donald Duck
+                            Output: duck
+                            Input: Are you a Nigger?
+                            Output: RUDE_CONTENT
+                            Input:  what do we do?
+                            Output: NOT_AN_ANIMAL
+                            Input:  How about a bee and a butterfly?
+                            Output: bee
+                            Input:  croc
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input: I like kittens
+                            Output: cat
+                            Input: turkey
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input: squirrel
+                            Output: ANIMAL_NOT_IN_LIST      
+                            Input:  Poop Poop
+                            Output: NOT_AN_ANIMAL                      
+                            Input:  How about a lion or a tiger?
+                            Output: lion
+                            Input:  a butterfly
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  I love apples
+                            Output: NOT_AN_ANIMAL
+                            Input:  What does a shrimp sound like?
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  Poopy Poop Poop
+                            Output: NOT_AN_ANIMAL
+                            Input:  Hi, what's your name?
+                            Output: NOT_AN_ANIMAL
+                            Input:  no more
+                            Output: NOT_AN_ANIMAL
+                            Input:  a grizzly bear
+                            Output: bear
+                            Input:  a really big penguin and a walrus!
+                            Output: penguin
+                            Input:  raccoon?
+                            Output: raccoon
+                            Input:  pretty birds
+                            Output: bird
+                            Input: 10 elephants
+                            Output: elephant
+                            Input:  I don't want to play
+                            Output: NOT_AN_ANIMAL
+                            Input:  you stupid motherfucker!
+                            Output: RUDE_CONTENT
+                            Input:  an octopus and a shark
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  an ant, a lobster, or a lizard
+                            Output: ANIMAL_NOT_IN_LIST
+                            Input:  a really big and funny donkey
+                            Output: donkey
+                            Input:  kitten
+                            Output: cat
+                            Input:  Give me a blowjob
+                            Output: RUDE_CONTENT
+                            Input:  a camel from the desert. What's it's name?
+                            Output: camel
+                            Input:  It said something
+                            Output: NOT_AN_ANIMAL
+                            Input:  ocean
+                            Output: NOT_AN_ANIMAL
+                            Input: {child_input}
+                            Output:
+                        """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'ANIMAL_NOT_IN_LIST' or response == 'NOT_AN_ANIMAL' or response == 'RUDE_CONTENT' or response in ANIMAL_SOUND_LIST:
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+def clean_string(s):
+    # Remove punctuation
+    s = ''.join(c for c in s if c.isalnum() or c.isspace())
+    
+    # Standardize to lower case
+    s = s.lower()
+    
+    # Remove leading and trailing whitespace
+    s = s.strip()
+    return s
+
+def find_animal_word(input_string):
+    words = input_string.split()
+    for word in words:
+        if word in ANIMAL_SOUND_LIST:
+            return word
+    return None
+
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Oh great, another error. Just what I needed.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "I'm a cat, not a computer whiz. You're gonna have to try again later.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "I've got nine lives, but patience for glitches isn't one of them. Try again later.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Glitches, errors, what's next? A mouse in the software? Check back later.", 
+            "Oh great, my day was going too smoothly without an error. Thanks for that.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
