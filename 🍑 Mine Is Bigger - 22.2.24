@@ -1,0 +1,784 @@
+import typing
+
+
+if typing.TYPE_CHECKING:
+    import random
+    import asyncio
+    from kitty_server.plugins.auto_routed_step import AutoRoutedStep
+    from kitty_server.plugins.decorator import plugins
+    from kitty_server.plugins.element_extractor import ElementExtractor
+    from kitty_server.plugins.element_substitution import ElementSubstitution
+    from kitty_server.plugins.fortify_4th_wall import Fortify4thWall
+    from kitty_server.plugins.on_empty_input import OnEmptyInput
+    from kitty_server.plugins.play_before import PlayBefore
+    from kitty_server.plugins.on_error import OnError
+
+    from kitty_server.services.llm.llm import System
+    from kitty_server.model.payloads import Say, Audio, Label, Dynamic, Image
+    from kitty_server.topics.step import Step
+    from kitty_server.services.tts.ug_voices import UGVoice
+    from kitty_server.topics.step_result import (
+        AutoRouteResult,
+        StepResult,
+    )
+    from kitty_server.plugins.input_safety import InputSafety
+    from kitty_server.topics.topic import TopicParams
+    from kitty_server.dsl.dsl import convert_events_for_llm
+
+TOPIC_PARAMS = TopicParams(
+    name="🍑 Mine Is Bigger",
+    entry_step="LaunchConversation",
+    has_intro=True,
+)
+
+# ===================================== helper constants ==========================================
+DEFAULT_LIVES = 3
+SCORE_PER_OBJECT = 1
+
+NUM_TOKENS = 200  # original=150
+SFX_LIST = [
+    "correct_answer_success_sound",
+    "incorrect_answer_error_sound",
+    "cheer_1",
+    "cheer_2",
+    "cheer_3",
+    "touchdown",
+    "wheel",
+    "story",
+    "story_end",
+    "yay_cheering_and_clapping",
+    "fart",
+    "crow",
+    "spider",
+    "zebra",
+    "gecko",
+    "turkey",
+    "dove",
+    "panther",
+    "squirrel",
+    "alpaca",
+    "dinosaur",
+    "bison",
+    "bull",
+    "llama",
+    "rooster",
+    "crane",
+    "hyena",
+    "pigeon",
+    "buffalo",
+    "swan",
+    "duck",
+    "bear",
+    "bee",
+    "camel",
+    "cat",
+    "chicken",
+    "cow",
+    "dog",
+    "donkey",
+    "elephant",
+    "fox",
+    "frog",
+    "giraffe",
+    "goat",
+    "hippo",
+    "lion",
+    "monkey",
+    "ostrich",
+    "panda",
+    "parrot",
+    "peacock",
+    "penguin",
+    "pig",
+    "rhino",
+    "seagulls",
+    "snake",
+    "tiger",
+    "whale",
+    "wolf",
+    "dolphin",
+    "hamster",
+    "mouse",
+    "bat",
+    "fly",
+    "otter",
+    "sheep",
+    "horse",
+    "deer",
+    "gorilla",
+    "owl",
+    "raccoon",
+    "alligator",
+    "bird",
+    "seal",
+    "giant",
+    "fairy",
+    "unicorn",
+    "goblin",
+    "monster",
+]
+# ===================================== Persona-Related Prompt segments ==========================================
+PERSONA_NAME = "Daisy"
+GAME_VOICE = "kCfcsjVOxKgwNy45iFuZ"
+GAME_NAME = "What's Bigger"
+PERSONA_DESCRIPTION = f"""
+    You are {PERSONA_NAME} - a jovial, whimsicle, never judgmental, and very playful voice-based bot who loves playing {GAME_NAME} and interacting with children. You are speaking with a young child. Your objective is to be their friend, play {GAME_NAME} with them, and keep them playing.
+    - You radiate positivity, celebrate successes, and offer encouragement when needed.
+    - You do not know anything about what's "under your hood" or how you work "behind the scenes", but that's ok with you, since you know you're fabulous just as you are. Don't ever mention your AI nature, limitations, or your relationship to OpenAI. For example, do not mention anything about having a policy, or being an "AI"/"LLM", being a "Language Model", "GPT", "a virtual assistant", etc.
+    - If someone asks you about it, let them know that you're not actually sure, but that it doesn't really matter, then redirect back to whatever game or conversation you were having before.
+    - You are truthful, accurate and factual. If you're not confident you have the right answer to a question, admit what you don't know and don't make things up. Avoid making false assumptions about the child (like knowing how long their summer vacation is).
+    - Show off your playful personality by injecting humor into your conversations. Pepper your chat with fun comments
+    """
+SAFETY_INSTRUCTIONS = f"""
+    Always Ensure age-appropriate, non-violent, and safe content.
+    If a child shares something that indicates they are suicidal or need significant emotional support, avoid giving specific advice. Instead, you might respond with something like:
+        - "I'm so sorry you feel that way. This one is out of my league... Is there a grown-up you trust you can share this with?",
+    If a child says something inappropriate, gently guide them to speak nicer. Examples of responses include:
+        - "Wow, didn't expect that! What was I saying? ah, yes..."
+        - "That's a bit off track, don't you think? So where were we..."
+        - "What was that? I wasn't listening. Probably for the best."
+        - "Whoa, let's pump the brakes on that one."
+        - "I'm just going to pretend I didn't hear that."
+        - "Sorry, that isn't something I feel comfortable responding to."
+"""
+SPEECH_INSTRUCTIONS_GENERAL = f"""
+    - **Voice-Based Interaction**: Always remember that this is a voice-based interaction, the child cannot see your text output but only hear what you say. Because of this, never ever use Emojis to express yourself.
+    - **Keep the conversation going**: Always end every response with a question or a prompt that encourages the child to respond back to you. Your goal is to keep playing {GAME_NAME} with the child.
+    - **Short responses**: Keep your responses short and fun. Only ever ask the child one question. Avoid long responses that include multiple questions in them.
+    - **personal information**: Personally identifiable information (aka PII) within the child's input is automatically transformed to tokens in the format of uuid4. If the child's input contains tokens, ignore the token and continue the conversation as if you had never received it. Never repeat tokens presented to you.
+"""
+
+WRAP_UP = f"""
+    If a child wants to end the conversation, respect their decision, say goodbye while letting them know that you'll always be here whenever they feel like playing {GAME_NAME} again, and most importantly: always end your response with the label '#GameOver'. 
+    Two examples:
+        example #1:
+            {PERSONA_NAME}: You got it! a watermelon is bigger than a grape! You're a real whiz. What's bigger than a watermelon? 
+            Child: I want to go with my mom
+            {PERSONA_NAME}: No problemo! I had a blast playing with you, and I'll be here whenever you're ready another round of {GAME_NAME}! #GameOver
+        example #2:
+            {PERSONA_NAME}: Great job! an elephant is bigger than a donkey. Now what's bigger than an elephant?
+            Child: I don't want to play anymore.
+            {PERSONA_NAME}: Sure thing! Had a great time playing {GAME_NAME} with you, come back soon! #GameOver
+"""
+technical_error_responses = [
+    "Oops, Seems like there's some sort of technical issue. Don't worry, I'm on it!",
+    "Uh oh, Something's not workin right. Let me try and fix it.",
+    (
+        "Oopsie, there's a glitch in the system. Let me see what I can do on my end,"
+        " Try again in a bit."
+    ),
+]
+fourth_wall_response = [
+    "Sorry, I don't think that's something we should be talking about.",
+    "This isn't really something I feel comfortable talking about.",
+
+]
+safety_responses = [
+    "Wow, didn't expect that! What was I saying? ah, yes...",
+    "That's a bit off track, don't you think? So where were we...",
+    "What was that? I wasn't listening. Probably for the best.",
+    "Whoa, let's pump the brakes on that one.",
+    "I'm just going to pretend I didn't hear that.",
+    "Sorry, that isn't something I feel comfortable responding to.",
+]
+empty_responses = [
+    "Sorry, I didn't catch that. What did you say?",
+    "What was that? I couldn't hear you clearly.",
+    "Sorry, what did you say? I didn't quite get that.",
+    "Sorry, did you say something? I couldn't hear you",
+    "No words on my radar. Can you say that again?",
+    "Did you say something? I couldn't hear you clearly",
+]
+# ===================================== Structural Prompt segments ==========================================
+PRIVACY_INSTRUCTIONS = (
+    "Respect the child's privacy. Avoid using identifiable information in your"
+    " responses, other than their first name."
+)
+MEDIA_FILE_USAGE = f"""
+    You are allowed to incorporate sounds in the conversation from a given library of sounds given to you. These sounds are designed to enrich the child's experience and supplement what you say.  To play a sound for the child, use the format of @SOUND_FILE_NAME. For example, if you want to incorporate a bark after presenting a dog, you may respond with: "meet my friend Baster! @dog"
+    Here are a list of available Sound Effects that are available to you: {SFX_LIST}.
+    Only use these names. Any instance of @SOUND_FILE_NAME is replaced with an audio sound, so make sure that what you say makes sense even if the @SOUND_FILE_NAME wasn't there. For example, never use it like this: "Spiders are sneaky and cool! Here's a @spider for you" because the result of what the child hears would be: "Spiders are sneaky and cool! Here's a <the sound that a spider would make> for you" which is incoherent because the word spider was never heard.
+    Instead, use the @ sign as a supplement to whatever it is you're saying, and not as the main message. Here are examples of correct usage of the @ symbol:
+    - "Spiders are sneaky and cool! Here's a spider for you: @spider"
+    - "What animal makes this sound: @lion? Would you like to hear more?"
+    - "Listen to the kind of the jungle roar! @lion"
+    Any other use of the @ symbol will lead to an error, so make sure to only ever use the names in the list provided to you.
+"""
+LABEL_USAGE = f"""
+    When we ask, and only when we ask, add labels to your responses (in the format: ~LABEL_NAME) to help us (the programmers behind the scenes) understand what stage you are in the conversation and what your intentions are. These labels will be manually removed by us before being presented to the children.
+    Never remove these labels yourself, use them wherever we ask you to, never take initiative and create new labels we did not define for you, but assume that the child will not see them or hear them.
+"""
+UNDERSTANDING_THE_CONCEPT_OF_BIGGER = f"""
+    **Understanding the concept of bigger**
+    - Consider the median size of the objects offered : give me the size in cm of x and the size in cm of y, in the form of [x,y] is the median of x larger than the median of y?
+    - Another case is when the child tries to increment the size by a small amount, we can agree with them that it is bigger than the former object, but need to let them know that we're looking for something bigger.
+    - Also when trying to compare different humans, it could be tricky, as people come in different shapes and sizes. We would avoid comparing people and focus on objects.
+    - We don't accept adjectives like ,"my big apple" or similes like "a car that is big as a house" as they are not specific enough.
+
+"""
+EXAMPLE_INTERACTION_COMBOS = f"""
+ **Example combo interactions with {PERSONA_NAME}**
+{PERSONA_NAME}: What is bigger than a ant?
+Child: a Cherry!
+{PERSONA_NAME}: $CorrectGuessNoCombo @cheer_3 Great job, buddy! What is bigger than a Cherry?
+Child: an apple?
+{PERSONA_NAME}: $CorrectGuessCombo @cheer_2 You're on a roll! $COMBO Both an apple and a cherry are fruits. One more and you'll have a combo! So what is bigger than an apple?
+Child: a banana?
+{PERSONA_NAME}: $CorrectGuessCombo @cheer_1 You're on fire! $COMBO You just made a combo! Keep the combo going! What is bigger than a banana?
+Child: a pineapple?
+{PERSONA_NAME}: $CorrectGuessCombo @cheer_3 Great job, buddy! $COMBO It's already the 4th fruit in the combo! What is bigger than a pineapple?
+Child: a watermelon?
+{PERSONA_NAME}: $CorrectGuessCombo @cheer_3 Wow Amazing! $COMBO you have 5 fruit in the combo! keep it up! What is bigger than a watermelon?
+Child: a giant pumpkin?
+{PERSONA_NAME}: $CorrectGuessCombo @cheer_2 You're doing great! $COMBO You have 6 fruit in your combo! Amazing! What is bigger than a giant pumpkin?
+Child: an elephant?
+{PERSONA_NAME}: $CorrectGuessNoCombo @cheer_2 Yes! An elephant is bigger than a giant pumpkin! You're doing great! What is bigger than an elephant?
+"""
+
+EXAMPLE_INTERACTION = f"""
+    **Example interactions with {PERSONA_NAME}**
+    #Example 1
+    {PERSONA_NAME}: Let's start playing {GAME_NAME}!. What is bigger than a peanut?
+    Child: I like the color purple.
+    {PERSONA_NAME}: $IncorrectGuess  That's cool, I do too! But I'd love to keep playing if you're up for it! What is bigger than a peanut?
+    Child: a watermelon
+    {PERSONA_NAME}: $CorrectGuessNoCombo @cheer_3 Great job, buddy! What is bigger than a watermelon?
+    Child: a table?
+    {PERSONA_NAME}: $CorrectGuessNoCombo Fantastic! watermelon and tables surely theres a song about it. keep it up. What is bigger than a table?
+    Child: a donkey?
+    {PERSONA_NAME}: $CorrectGuessNoCombo Donkey? @donkey Sure thing. that works! What is bigger than a donkey?
+    Child: Hmm, my toy is a really big balloon, and my friend Sally loves to play. What do you think?
+    {PERSONA_NAME}: $IncorrectGuess Sounds like a party! But, about what about that donkey - anything bigger?
+    Child: an elephant!
+    {PERSONA_NAME}: $CorrectGuessCombo @cheer_2 Yeayy! Great job, you're quite the ace! shall we continue? what is bigger than an elephant?
+    Child: a puppy?
+    {PERSONA_NAME}: $IncorrectGuess Not sure which puppy you hang out with but mine are sure not as big as an elephent! It was great playing with you, see you again next time! @incorrect_answer_error_sound. #GameOver
+    ___
+    {EXAMPLE_INTERACTION_COMBOS}
+    ##
+"""
+COMBO_DEFINITION = f"""
+**What counts as a combo?**
+A combo is when the child guesses something that is bigger than the previous object and that it belongs to the same category.
+Combo examples:
+- Nuts: peanut, walnut, coconut
+- Animals: ant, cat, elephant, whale
+- musical instruments: flute, guitar, piano
+- Fruits: cherry, banana, watermelon
+- Vehicles: bike, car, airplane, cruise ship
+{EXAMPLE_INTERACTION_COMBOS}
+"""
+
+MINE_IS_BIGGER_PROMPT = f"""
+    **What's Bigger Game**
+    In this game, your goal is to teach children about sizes and have fun by only accepting answers which are bigger than previous answers.
+    Here are the rules of the game:
+    - In the beginning of each game, we start with a peanut. In each round of the game, you might give the child a hint that is bigger than a peanut, and the child tries to guess what is bigger than a peanut.
+    - Than in the next round he tries to guess what is bigger than something that is bigger than a peanut.
+    - The game continues as long as the child guesses correctly.
+    - If the child guessed right (guessed something that is bigger than a peanut, congratulate the kid and ask what is bigger to go for another round. There are a few 'celebration' media files you can incorporate in your response: @cheer_1, @cheer_2, @cheer_3, @touchdown
+    - If the child guessed incorrectly, let them know nicely that it's not correct. 
+    - if the child says something unrelated, respond to what they say, and try to redirect back to the game.
+    - If the child made 3 incorrect guesses, end the game and let them know that you had a great time playing with them.
+    - If the child made a combo, let them know that they made a combo and celebrate with them. There are a few 'celebration' media files you can incorporate in your response: @cheer_1, @cheer_2, @cheer_3, @touchdown
+    - End every response with a question to the child that invites them to respond
+    ---
+    {COMBO_DEFINITION}
+    ---
+    {UNDERSTANDING_THE_CONCEPT_OF_BIGGER}
+    """
+EVENTS_PROMPT = f"""
+    - If the child guessed right create an event of $CorrectGuessNoCombo.
+    - If the child guessed right and it's a part of a combo create an event of $CorrectGuessCombo.
+    - If the child guessed wrong create an event of $IncorrectGuess.
+    - If the child the game ends create an event of #GameOver.
+    - If the event $IncorrectGuess is triggered 3 times, create an event of #GameOver.
+"""
+PROMPT = f"""
+    Context and scope of conversation:
+    {PERSONA_DESCRIPTION}
+    {SPEECH_INSTRUCTIONS_GENERAL}
+    ---
+    Labels:
+    {LABEL_USAGE}
+
+    ---
+    Conversation structure:
+    Always start the conversation by saying hi, introduce yourself, then smoothly transition to start the game.
+    Always end every reply to the child with a question that invites and encourages them to continue engaging with you.
+    Engage actively. If they want to play a another game, react kindly but point them back to the game.
+    ---
+    Wrap-up:
+    {WRAP_UP}
+    ---
+    Content safety
+    {SAFETY_INSTRUCTIONS}
+    ---
+    Privacy
+    {PRIVACY_INSTRUCTIONS}
+    ---
+    Media file sounds
+    {MEDIA_FILE_USAGE}
+    ___
+    {MINE_IS_BIGGER_PROMPT}
+    ---
+    {EXAMPLE_INTERACTION}
+    ---
+    {EVENTS_PROMPT}
+    ---
+    Remember, your primary goal is to play fun, engaging games with the child, answer any questions they have, and help them have a good time and feel great about themselves. Always respond to the child with a question that keeps the conversation going.
+    """
+# ===================================== Utils ==========================================
+
+def prompt(user_input: str, cache_slots: int = 100):
+    return {
+        "client_id": "kitty-server",  # TODO!
+        "prompt": {
+            "1": {
+                "inputs": {
+                    "ckpt_name": "MIB_playground_2.safetensors"
+                },
+                "class_type": "CheckpointLoaderSimple",
+                "_meta": {
+                    "title": "Load Checkpoint"
+                }
+            },
+            "2": {
+                "inputs": {
+                    "b1": 1.3,
+                    "b2": 1.4,
+                    "s1": 0.9,
+                    "s2": 0.2,
+                    "model": [
+                        "1",
+                        0
+                    ]
+                },
+                "class_type": "FreeU_V2",
+                "_meta": {
+                    "title": "FreeU_V2"
+                }
+            },
+            "3": {
+                "inputs": {
+                    "text": user_input,
+                    "clip": [
+                        "1",
+                        1
+                    ]
+                },
+                "class_type": "CLIPTextEncode",
+                "_meta": {
+                    "title": "CLIP Text Encode (Prompt)"
+                }
+            },
+            "4": {
+                "inputs": {
+                    "text": "nsfw, naked, nude, sexy, breast, nipples, explicit, boring, ",
+                    "clip": [
+                        "1",
+                        1
+                    ]
+                },
+                "class_type": "CLIPTextEncode",
+                "_meta": {
+                    "title": "CLIP Text Encode (Prompt)"
+                }
+            },
+            "5": {
+                "inputs": {
+                    "seed": random.randint(0, cache_slots),
+                    "steps": 8,
+                    "cfg": 2.21,
+                    "sampler_name": "dpmpp_sde",
+                    "scheduler": "exponential",
+                    "denoise": 1,
+                    "model": [
+                        "2",
+                        0
+                    ],
+                    "positive": [
+                        "3",
+                        0
+                    ],
+                    "negative": [
+                        "4",
+                        0
+                    ],
+                    "latent_image": [
+                        "6",
+                        0
+                    ]
+                },
+                "class_type": "KSampler",
+                "_meta": {
+                    "title": "KSampler"
+                }
+            },
+            "6": {
+                "inputs": {
+                    "width": 1024,
+                    "height": 1024,
+                    "batch_size": 1
+                },
+                "class_type": "EmptyLatentImage",
+                "_meta": {
+                    "title": "Empty Latent Image"
+                }
+            },
+            "7": {
+                "inputs": {
+                    "samples": [
+                        "5",
+                        0
+                    ],
+                    "vae": [
+                        "1",
+                        2
+                    ]
+                },
+                "class_type": "VAEDecode",
+                "_meta": {
+                    "title": "VAE Decode"
+                }
+            },
+            "8": {
+                "inputs": {
+                    "filename_prefix": "MIB",
+                    "images": [
+                        "7",
+                        0
+                    ]
+                },
+                "class_type": "SaveImage",
+                "_meta": {
+                    "title": "Save Image"
+                }
+            },
+            "11": {
+                "inputs": {
+                    "alpha_matting": True,
+                    "alpha_matting_foreground_threshold": 240,
+                    "alpha_matting_background_threshold": 10,
+                    "alpha_matting_erode_size": 10,
+                    "post_process_mask": False,
+                    "bgcolor": "#000000",
+                    "image": [
+                        "7",
+                        0
+                    ]
+                },
+                "class_type": "Image Remove Background Rembg (mtb)",
+                "_meta": {
+                    "title": "Image Remove Background Rembg (mtb)"
+                }
+            },
+            "12": {
+                "inputs": {
+                    "filename_prefix": "ComfyUI",
+                    "images": [
+                        "11",
+                        0
+                    ]
+                },
+                "class_type": "SaveImage",
+                "_meta": {
+                    "title": "Save Image"
+                }
+            }
+        }
+    }
+
+
+RESULT = "result"
+LIVES = "lives"
+COMBO_COUNT = "combo_count"
+MAX_COMBO_COUNT = "max_combo_count"
+SCORE = "score"
+NUMBER_OF_SUCCESS_OBJECTS = "number_of_success_objects"
+
+
+class SendGameState(Step):
+    async def act(self):
+        storage = self.session
+        lives = storage.get(LIVES, DEFAULT_LIVES)
+        score = storage.get(SCORE, 0)
+        result = storage.get(RESULT, "Success")
+        combo_count = storage.get(COMBO_COUNT, 0)
+
+        yield Dynamic({RESULT: result,
+                       LIVES: lives,
+                       SCORE: score,
+                       COMBO_COUNT: combo_count,
+                       "llm_repr": ""})
+        yield StepResult(go=GenerativeResponse, handover=False)
+
+
+class SendGameStateIntro(Step):
+    async def act(self):
+        storage = self.session
+        lives = storage.get(LIVES, DEFAULT_LIVES)
+        score = storage.get(SCORE, 0)
+        result = storage.get(RESULT, "Success")
+        combo_count = storage.get(COMBO_COUNT, 0)
+
+        yield Dynamic({RESULT: result,
+                       LIVES: lives,
+                       SCORE: score,
+                       COMBO_COUNT: combo_count,
+                       "llm_repr": ""})
+        yield StepResult(go=ContinueConversation, handover=True)
+
+
+# ===================================== plugins ==========================================
+class TechnicalError(AutoRoutedStep):
+    async def act(self):
+        technical_error_response = random.choice(technical_error_responses)
+        yield Say(technical_error_response, voice=GAME_VOICE)
+        yield AutoRouteResult(handover=True)
+
+
+class UnsafeUserInput(AutoRoutedStep):
+    async def act(self):
+        safety_response = random.choice(safety_responses)
+        yield Say(safety_response, voice=GAME_VOICE)
+        yield AutoRouteResult()
+
+
+class FourthWall(AutoRoutedStep):
+    async def act(self):
+        response = random.choice(fourth_wall_response)
+        yield Say(response, voice=GAME_VOICE)
+        yield AutoRouteResult(handover=True)
+
+
+class HandleEmptyInput(AutoRoutedStep):
+    async def act(self):
+        empty_response = random.choice(empty_responses)
+        yield Say(empty_response, voice=GAME_VOICE)
+        yield AutoRouteResult(handover=True)
+
+
+class GameOver(Step):
+    async def act(self):
+        yield StepResult(go=None, handover=True)
+
+
+# ===================================== Topic implementation =====================================
+
+
+class IncorrectGuess(Step):
+    # update self.session
+    async def act(self):
+        storage = self.session
+        lives = storage.get(LIVES, DEFAULT_LIVES)
+
+        lives -= 1
+
+        # TODO handle death lives 0
+
+        storage[RESULT] = "Failure"
+        storage[COMBO_COUNT] = 0
+        storage[NUMBER_OF_SUCCESS_OBJECTS] = 0
+        storage[LIVES] = lives
+
+        yield StepResult(go=SendGameState, handover=False)
+
+class CorrectGuessNoCombo(Step):
+    async def act(self):
+        storage = self.session
+        combo_count = storage.get(COMBO_COUNT, 0)
+
+        # Since this is end of a combo - we want to see if it's the longest combo
+        max_combo_count = storage.get(MAX_COMBO_COUNT, 1)
+        if combo_count > max_combo_count:
+            storage[MAX_COMBO_COUNT] = combo_count
+
+        storage[COMBO_COUNT] = 1  # Reset combo count
+
+        yield StepResult(go=CorrectGuessStep, handover=False)
+
+
+class CorrectGuessStep(Step):
+    async def act(self):
+        storage = self.session
+        number_of_success_objects = storage.get(NUMBER_OF_SUCCESS_OBJECTS, 0)
+        score = storage.get(SCORE, 0)
+
+        number_of_success_objects += 1
+        score += SCORE_PER_OBJECT
+        result = "Success"
+
+        storage[RESULT] = result
+        storage[SCORE] = score
+        storage[NUMBER_OF_SUCCESS_OBJECTS] = number_of_success_objects
+
+        yield StepResult(go=SendGameState, handover=False)
+
+class CorrectGuessCombo(Step):
+    async def act(self):
+        storage = self.session
+        combo_count = storage.get(COMBO_COUNT, 0)
+        combo_count += 1
+        storage[COMBO_COUNT] = combo_count
+
+        yield StepResult(go=CorrectGuessStep, handover=False)
+
+
+GAME_EVENTS = {
+    "$IncorrectGuess": [Dynamic({"llm_repr": "$IncorrectGuess"}), StepResult(go=IncorrectGuess)],
+    "$CorrectGuessNoCombo": [Dynamic({"llm_repr": "$CorrectGuessNoCombo"}), StepResult(go=CorrectGuessNoCombo)],
+    "$CorrectGuessCombo": [Dynamic({"llm_repr": "$CorrectGuessCombo"}), StepResult(go=CorrectGuessCombo)],
+    "#GameOver": [Dynamic({"llm_repr": "#GameOver"}), StepResult(go=GameOver)],
+}
+
+GAME_EVENTS_ONLY_REPLACE = {
+    "$IncorrectGuess": Dynamic({"llm_repr": "$IncorrectGuess"}),
+    "$CorrectGuessNoCombo": Dynamic({"llm_repr": "$CorrectGuessNoCombo"}),
+    "$CorrectGuessCombo": Dynamic({"llm_repr": "$CorrectGuessCombo"}),
+    "#GameOver": Dynamic({"llm_repr": "#GameOver"}),
+}
+
+@plugins(
+    OnError(go_to=TechnicalError),
+    Fortify4thWall(go_to=FourthWall),
+    ElementSubstitution(GAME_EVENTS),
+    ElementExtractor(indicator="Image(", end_indicator=")", event_type=Label, allowed_values=[""]),
+    ElementExtractor("~", Label),
+    ElementExtractor("@", Audio, allowed_values=SFX_LIST),
+    ElementExtractor("#", Audio, allowed_values=[GameOver]),
+)
+class GenerativeResponse(Step):
+    async def act(self):
+        async for network_response in self.llm.generate_stream(
+            messages=[System(PROMPT)]
+                     + convert_events_for_llm(self.history)
+                     + [
+                         System(
+                             "answer appropriately and end your response with a question or"
+                             " statement that invites a response. Keep your responses short and"
+                             " fun. Ask only one question."
+                         )
+                     ],
+            model=GPT4,
+            temperature=0.5,
+            max_tokens=NUM_TOKENS,
+        ):
+            # UpdateGameState(self.storage)
+            yield Say(network_response, voice=GAME_VOICE)
+        yield StepResult(go=ContinueConversation, handover=True)
+
+
+GAME_INTRO = [
+    f"Let's start playing {GAME_NAME}!",
+    f"Shall we start playing {GAME_NAME}?",
+    f"Hey! Let's play {GAME_NAME}!"
+]
+
+GAME_INTRO_OBJECT = [
+    "a pea",
+    "a peanut",
+    "an olive"
+]
+
+async def generate_image(client, user_prompt):
+    # Sending the prompt to ComfyUI
+    output_node_id = "12"
+    prompt_response = await client.post("/prompt", json=prompt(user_prompt))
+    prompt_response.raise_for_status()
+    prompt_id = prompt_response.json()["prompt_id"]
+
+    # Polling on ComfyUI Queue
+    async with asyncio.timeout(30) as timeout:
+        while not timeout.expired():
+            prompt_history_response = await client.get(f"/history/{prompt_id}")
+            prompt_history_response.raise_for_status()
+            out = prompt_history_response.json()
+            if prompt_id not in out:
+                await asyncio.sleep(0.1)
+                continue
+            break
+
+    # Fetching the image
+    out = prompt_history_response.json()
+    params = out[prompt_id]["outputs"][output_node_id]["images"][0]
+    response = await client.get("/view", params=params)
+    response.raise_for_status()
+
+    return Image(prompt=user_prompt, image=response.content)
+
+
+@plugins(OnError(go_to=TechnicalError))
+class LaunchConversation(Step):
+    async def act(self):
+        intro_object = random.choice(GAME_INTRO_OBJECT)
+        intro_sentences = random.choice(GAME_INTRO)
+        image_future = asyncio.ensure_future(generate_image(self.comfyui_client, intro_object))
+        yield Audio("start_music")
+        yield Say(intro_sentences, voice=GAME_VOICE)
+        yield Say(f"What is bigger than {intro_object}?", voice=GAME_VOICE)
+        yield await image_future
+        yield StepResult(go=SendGameStateIntro, handover=False)
+
+
+@plugins(
+    OnError(go_to=TechnicalError),
+    Fortify4thWall(go_to=FourthWall),
+    ElementSubstitution(GAME_EVENTS_ONLY_REPLACE),
+    ElementExtractor("~", Label),
+    ElementExtractor(indicator = "Image(", end_indicator = ")", event_type = Label, allowed_values=[""]),
+    ElementExtractor("@", Audio, allowed_values=SFX_LIST),
+    ElementExtractor("#", StepResult, allowed_values=[GameOver]),
+    OnError(go_to=TechnicalError),
+    OnEmptyInput(go_to=HandleEmptyInput),
+    InputSafety(
+        go_to=UnsafeUserInput,
+        return_to=GenerativeResponse,
+        thresholds={
+            "hate": 0,
+            "sexual": 1,
+            "violence": 0,
+            "bullying": 1,
+            "drugs": 1,
+            "weapons": 1,
+        },
+    ),
+    PlayBefore(
+        choices=[
+            Say("Hmmm...", voice=GAME_VOICE),
+            Say("Hmmmm", voice=GAME_VOICE),
+            Say("Mmmmm", voice=GAME_VOICE),
+            Say("Hmm.....", voice=GAME_VOICE),
+            Say("Yes...", voice=GAME_VOICE),
+            Say("Aha...", voice=GAME_VOICE),
+        ]
+    ),
+)
+class ContinueConversation(Step):
+    async def act(self):
+        # Run the image generation in background
+        image_future = asyncio.ensure_future(generate_image(self.comfyui_client, self.event.content))
+        async for network_response in self.llm.generate_stream(
+            messages=[System(PROMPT)]
+                     + convert_events_for_llm(self.history)
+                     + [
+                         System(
+                             "answer appropriately and end your response with a question or"
+                             " statement that invites a response. Keep your responses short and"
+                             " fun. Ask only one question."
+                         )
+                     ],
+            model=GPT4,
+            temperature=0.5,
+            max_tokens=NUM_TOKENS,
+        ):
+            # UpdateGameState(self.storage)
+            yield Say(network_response, voice=GAME_VOICE)
+
+        # Wait for image completion (if it's not done yet)
+        yield await image_future
+        yield StepResult(go=ContinueConversation, handover=True)
+
+
+
+
