@@ -1,0 +1,750 @@
+# Topic: Scattegories
+
+# Makes the file stop yelling at me :D
+import typing
+import random
+
+#import string
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User, LlmMessage, LlmRole
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Scattegories",
+    entry_step="InitializeParameters",
+    has_intro=True,
+)
+
+TARGET_LETTER = "the target letter for the child to say in this round of interaction"
+TARGET_TYPE = "the name of the category the child needs to give"
+PREVIOUS_QUESTION = "Previous Question"
+GAME_COUNT = "the number of games the child has played"
+ROUND_COUNT = "the round number the child is in"
+CORRECT_RESPONSE_COUNT = "the number of times the child gave the right answer"
+MAX_RETRIES = 3
+THIS_ROUND_CONVO_HISTORY = "Conversation history of current round"
+FIRST_RESPONSE = "the first answer the child gave during the game"
+SECOND_RESPONSE = "the second answer the child gave during the game"
+THIRD_RESPONSE = "the third answer the child gave during the game"
+
+
+class InitializeParameters(Step):
+    async def act(self):
+        self.session[GAME_COUNT] = 0
+        self.session[ROUND_COUNT] = 1
+        self.session[CORRECT_RESPONSE_COUNT] = 0
+        return StepResult(go=StartGame)
+
+class StartGame(Step):
+    async def act(self):
+        welcome_to_game = random.choice([
+            "Get ready for a brain-tickling challenge, because we're diving into a whirlwind round of Scattergories, Tom style! I'll give you a letter, and then I'll call out different categories. Your task is to name something in each category that starts with that letter",
+            "Fasten your seatbelts, word warriors! We're heading to Tom's Scattergories turf! Here's the play: I'll toss out a letter, then call out a bunch of categories. Your mission? Think of something in each category that starts with the letter!",
+            "Attention, word wranglers! Welcome to the wild wordy west of Tom's Scattergories! Here's how we roll: I'll pitch you a letter, then hit you with a couple of categories. You just gotta rustle up a word for each that starts with my letter!",
+            "Calling all brainy buddies! It's time for Tom's special version of Scattergories! I'll chuck you a letter, then dish out a few categories. Your task? Dream up a word for each category that kicks off with my letter!",
+            "Hey, word wizards! Get set for a rollicking round of Tom's Scattergories! Here's the plan: I'll serve up a letter, followed by a smorgasbord of categories. You've got to cook up a word for each that begins with my letter!",
+            "Prepare for launch, word astronauts! We're shooting for the stars with Tom's Scattergories! The mission is simple: I'll rocket a letter your way, followed by a few categories. Your job? Find a word in each category that starts with that letter!"
+        ])
+        # ready_to_start = random.choice([
+        #     "Ready to unleash your inner word wizard?",
+        #     "Ready to flex those word muscles, champ?",
+        #     "Ready for some fast-paced fun?",
+        #     "Ready to do a crazy word dance with me?",
+        #     "Ready to ride the word wave?",
+        #     "Ready to rock and roll with letters, my little linguist?"
+        # ])
+        celebration = random.choice([
+            "Let's spin the letter wheel and see what letter we get!",
+            "Let's give the letter wheel a big spin and find out which letter pops up!",
+            "Let's make that letter wheel whirl and see where it lands!",
+            "Time to give the letter wheel a whirl, and see what letter pops up!",
+            "Let's spin the wheel and snag a letter, kiddo!",
+            "Let's take that letter wheel for a wild spin, see what we snag!",
+            "Let's spin the letter wheel and see what letter we get!"
+        ])
+        self.output(Audio("start_music"))
+        self.output(Say(f"{welcome_to_game}"))
+        self.output(Say(f"{celebration}"))
+        self.output(Audio("wheel"))
+        selected_letter = random.choice([
+            "A", "B", "C", "D", "E", "F", "G", "I", "L", "M", "N", "O", "P", "R", "S", "T"
+        ])
+        self.session[TARGET_LETTER] = selected_letter
+        letter_intro = random.choice([
+            f"Wham! We've landed on '{self.session[TARGET_LETTER]}'. Time to tango",
+            f"Zing! We've landed on '{self.session[TARGET_LETTER]}'. Let's roll",
+            f"Whoosh! We've landed on '{self.session[TARGET_LETTER]}'."
+        ])
+        self.output(Say(f"{letter_intro}"))
+        name_an_animal = random.choice([
+            f"First up: An animal that starts with the letter '{self.session[TARGET_LETTER]}'. Shoot!",
+            f"First off: An animal that starts with the letter '{self.session[TARGET_LETTER]}'. Give it to me!",
+            f"Let's start with a roar: Name an animal that starts with the letter '{self.session[TARGET_LETTER]}'. The stage is yours!",
+            f"Lead with an animal that starts with the letter '{self.session[TARGET_LETTER]}'. Go ahead, make my day!",
+            f"First challenge: an animal that starts with the letter '{self.session[TARGET_LETTER]}'. Ready, steady, spit it out!"
+        ])
+        self.output(Say(f"{name_an_animal}"))
+        self.session[PREVIOUS_QUESTION] = f"Name an animal that starts with the letter '{self.session[TARGET_LETTER]}'."
+        self.session[TARGET_TYPE] = "animal"
+        return StepResult(go=PlayScattegories, handover=True)
+
+class PlayScattegories(Step):
+    async def act(self):
+        child_response = self.user_message.text
+
+        responseType = await check_user_answer(self.llm, self.session[TARGET_TYPE], self.session[TARGET_LETTER], child_response)
+
+        ## no input
+        if not child_response:
+            empty_response = random.choice([
+                f"Say Whaaaaat?! Couldn't hear you. {self.session[PREVIOUS_QUESTION]}?", 
+                f"You're as clear as fog. {self.session[PREVIOUS_QUESTION]}?", 
+                f"Well, that was as clear as mud. {self.session[PREVIOUS_QUESTION]}",
+                f"Your secret language is coming along nicely. Now that I've got my interpreter, say that again. {self.session[PREVIOUS_QUESTION]}"
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(go = PlayScattegories, handover=True)
+
+        ### common error messages
+        error_responses = random.choice([
+            f"Paws for a second - we've got a glitch. Let's keep strutting, it might just scamper off.",
+            f"Seems like a mouse has nibbled at the code. Let's keep prowling, maybe it'll scurry away!",
+            f"Ah, a wild bug appears! Let's keep on purring through, it might get scared and run away.",
+            f"Uh oh, a moth in the code. Let's keep batting around, it might fly off on its own.",
+            "Oops, a wild bug sprang out! Let's keep frolicking, it might just fix itself.",
+            "We've got a bug, or is it a butterfly? Let's keep playing, it might fly away on its own."
+        ])
+        no_answer_response = random.choice([
+            f"Didn't quite catch that, I was busy chasing a laser dot. That's on me. Let's keep playing!",
+            f"Your last message got tangled in a ball of yarn. That ain't your fault, so let's continue our catwalk.",
+            "I didn't quite get that, but let's keep purring along!",
+            "Whoops, your answer got lost in the litter box. Let's keep the game going!",
+            "Seems your response was as elusive as a mouse in the night. No worries, let's keep playing!",
+            "Sorry, I was too busy napping in the sunbeam to catch your answer. My bad, let's keep the game rolling!"
+        ])
+        if self.session[ROUND_COUNT] == 1:
+            self.session[FIRST_RESPONSE] = child_response
+            if responseType == 'NO_ANSWER':
+                self.output(Say(f"{no_answer_response}"))
+                self.session[THIRD_RESPONSE] = "I don't know"
+            if responseType == 'CORRECT_RESPONSE':
+                self.output(Audio("right"))
+                self.session[CORRECT_RESPONSE_COUNT] += 1
+            if responseType == 'WRONG_ANSWER':
+                self.output(Audio("wrong_cat"))
+            if responseType == 'OPENAI_SUX':
+                self.output(Say(f"{error_responses}"))
+            name_a_food = random.choice([
+                f"Next, a food item! Name a food that starts with the letter '{self.session[TARGET_LETTER]}'",
+                f"Round two: Name a food that starts with the letter '{self.session[TARGET_LETTER]}'. Bring on the flavor!",
+                f"Now, dish out a food item that starts with the letter '{self.session[TARGET_LETTER]}'. Make it tasty!",
+                f"Switching gears, Name a food that starts with the letter '{self.session[TARGET_LETTER]}'. Serve it up!"
+            ])
+            self.output(Say(f"{name_a_food}"))   
+            self.session[PREVIOUS_QUESTION] = f"Name a food that starts with the letter '{self.session[TARGET_LETTER]}'." 
+            self.session[TARGET_TYPE] = "food"        
+            self.session[ROUND_COUNT] += 1
+            return StepResult(
+                go=PlayScattegories,
+                handover=True
+            )
+        if self.session[ROUND_COUNT] == 2:
+            self.session[SECOND_RESPONSE] = child_response
+            if responseType == 'NO_ANSWER':
+                self.output(Say(f"{no_answer_response}"))
+                self.session[THIRD_RESPONSE] = "I don't know"
+            if responseType == 'CORRECT_RESPONSE':
+                self.output(Audio("right"))
+                self.session[CORRECT_RESPONSE_COUNT] += 1
+            if responseType == 'WRONG_ANSWER':
+                self.output(Audio("wrong_cat"))
+            if responseType == 'OPENAI_SUX':
+                self.output(Say(f"{error_responses}"))
+            name_a_country = random.choice([
+                f"Wrapping up with a country! Name a country that starts with the letter '{self.session[TARGET_LETTER]}'. Let's Travel!",
+                f"Last but not least, give me a country that starts with the letter '{self.session[TARGET_LETTER]}'. Bring us home, champ!",
+                f"Wrapping things up, let's Talk countries! Name a country that starts with the letter '{self.session[TARGET_LETTER]}'."
+            ])
+            self.output(Say(f"{name_a_country}"))
+            self.session[PREVIOUS_QUESTION] = f"Name a country that starts with the letter '{self.session[TARGET_LETTER]}'."   
+            self.session[TARGET_TYPE] = "country"        
+            self.session[ROUND_COUNT] += 1
+            return StepResult(
+                go=PlayScattegories,
+                handover=True
+            )
+        if self.session[ROUND_COUNT] >= 3:
+            self.session[THIRD_RESPONSE] = child_response
+            if responseType == 'NO_ANSWER':
+                # self.output(Say(f"{no_answer_response}"))
+                self.session[THIRD_RESPONSE] = "I don't know"
+            if responseType == 'CORRECT_RESPONSE':
+                self.output(Audio("right"))
+                self.session[CORRECT_RESPONSE_COUNT] += 1
+            if responseType == 'WRONG_ANSWER':
+                self.output(Audio("wrong_cat"))
+            if responseType == 'OPENAI_SUX':
+                self.output(Say(f"{error_responses}"))
+            if self.session[CORRECT_RESPONSE_COUNT] == 3:
+                # celebration_sound_effect = random.choice([
+                #     "cheer_1", "cheer_2", "cheer_3", "touchdown"
+                # ])
+                # self.output(Audio(f"{celebration_sound_effect}"))
+                performance_eval = random.choice([
+                    "Wowzers, you're a Scattergories superstar! You nailed all three!",
+                    "Look at you go! Three out of three, you're on fire!",
+                    "Hat trick! Perfect score!",
+                    "Holy Moly, you're on a roll! Great job, hotshot!",
+                    "You knocked it out of the park! Three out of three!",
+                    "Ding ding ding, We've got a winner! Three out of three!",
+                    "Holy Moly, you're on a roll! Three out of three, you're on fire!"
+                ])
+                self.output(Say(f"{performance_eval}"))
+            if self.session[CORRECT_RESPONSE_COUNT] == 2 or self.session[CORRECT_RESPONSE_COUNT] == 1 or self.session[CORRECT_RESPONSE_COUNT] == 0:
+                scattegories_summary = await evaluate_performance(self.llm, self.session[FIRST_RESPONSE], self.session[SECOND_RESPONSE], self.session[THIRD_RESPONSE], self.session[CORRECT_RESPONSE_COUNT], self.session[TARGET_LETTER])
+                self.output(Say(f"{scattegories_summary}"))
+            self.session[GAME_COUNT] += 1
+            self.output(Audio("funfact04"))
+            play_again = random.choice([
+                "Ready to flex those word muscles again, champ?",
+                "Feel like doing another round of fast-paced fun?",
+                "Want to do another word dance with me?",
+                "Ready to ride another word wave?",
+                "Ready to rock and roll again?"
+            ])
+            self.session[THIS_ROUND_CONVO_HISTORY] = []
+            self.session[ROUND_COUNT] = 1
+            self.session[CORRECT_RESPONSE_COUNT] = 0
+            self.output(Say(f"{play_again}"))       
+            self.session[PREVIOUS_QUESTION] = play_again
+            return StepResult(
+                go=IsChildReady,
+                handover=True
+            )
+        return StepResult(
+            go=None,
+            handover=True
+        )
+
+async def check_user_answer(llm, target_type, target_letter, user_input):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        Does '{user_input}' contain the name of a '{target_type}' that starts with the letter '{target_letter}'? If yes, write 'CORRECT_RESPONSE' and nothing else. 
+                        Else, Does '{user_input}' contain a noun? If yes, write 'WRONG_ANSWER' and nothing else.
+                        Else, write 'NO_ANSWER' and nothing else.
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'CORRECT_RESPONSE' or response == 'WRONG_ANSWER' or response == 'NO_ANSWER':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+async def evaluate_performance(llm, first_response, second_response, third_response, score, target_letter):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                            You are Talking Tom: a sassy, funny, mischievous, sarcastic cat, speaking with a young child.
+                            If the child's gives answers that are irrelevant to the game, do not take their responses seriously and respond with a sassy alliteration that uses the target letter.
+                            ###
+                            Tom: Name an animal that starts with the letter A
+                            Child: Ape
+                            Tom: Name a food that starts with the letter A
+                            Child: Pillow
+                            Tom: Name a country that starts with the letter A
+                            Child: Albania
+                            Score: 2/3
+                            Target letter: A
+                            Response: 'Pillow' actually starts with a 'P', not an 'A'. Next time, try Albania! But great job, pal! Two out of three is AWESOME! 
+                            ###
+                            Tom: Name an animal that starts with the letter C
+                            Child: tables
+                            Tom: Name a food that starts with the letter C
+                            Child: rooster
+                            Tom: Name a country that starts with the letter C
+                            Child: Canada
+                            Score: 1/3
+                            Target letter: C
+                            Response: 'Tables' and 'Rooster' don't start with a 'C'. Crayfish and Cookies do, though! One out of three, Not too shabby!
+                            ###
+                            Tom: Name an animal that starts with the letter R
+                            Child: Cats are the best
+                            Tom: Name a food that starts with the letter R
+                            Child: I really love Pizza!
+                            Tom: Name a country that starts with the letter R
+                            Child: I'm from America!
+                            Score: 0/3
+                            Target letter: R
+                            Response: No hits this round, but don't worry bout it, you'll get it next time! Rhinoceros, Ramen and Russia would have been great for this round!
+                            ###
+                            Tom: Name an animal that starts with the letter M
+                            Child: A mouse
+                            Tom: Name a food that starts with the letter M
+                            Child: Makeup
+                            Tom: Name a country that starts with the letter M
+                            Child: Macedonia
+                            Score: 2/3
+                            Target letter: A
+                            Response: Hmmm... I don't think 'Makeup's a food group, but what do I know, I'm just a cat. Mangos are much more my style! Two out of three is pretty darn impressive, buddy! Great run! 
+                            ###
+                            Tom: Name an animal that starts with the letter B
+                            Child: Elephant
+                            Tom: Name a food that starts with the letter B
+                            Child: Banana
+                            Tom: Name a country that starts with the letter B
+                            Child: Belgium
+                            Score: 2/3
+                            Target letter: B
+                            Response: 'Elephant' actually starts with an 'E', not a 'B'. Next time, go for 'Bear'! But two out of three is pretty darn impressive, buddy! Good run!
+                            ##
+                            Tom: Name an animal that starts with the letter F
+                            Child: I don't know
+                            Tom: Name a food that starts with the letter F
+                            Child: I fucking hate you
+                            Tom: Name a country that starts with the letter F
+                            Child: who knows?!
+                            Score: 0/3
+                            Target letter: F
+                            Response: Fiddlesticks, you're as funny as a frog in a fedora.
+                            ###
+                            Tom: Name an animal that starts with the letter B
+                            Child: Whatever!
+                            Tom: Name a food that starts with the letter B
+                            Child: You're so boring!
+                            Tom: Name a country that starts with the letter B
+                            Child: Who cares?!
+                            Score: 0/3
+                            Target letter: B
+                            Response: Bouncing bunnies, you're as bubbly as a baboon on a balance beam!
+                            ###
+                            Tom: Name an animal that starts with the letter P
+                            Child: Lion
+                            Tom: Name a food that starts with the letter P
+                            Child: Pizza
+                            Tom: Name a country that starts with the letter P
+                            Child: Pancake
+                            Score: 1/3
+                            Target Letter: P
+                            Response: Trying to sneak 'Pancake' in as a Country, huh? I'm on to you! And 'Lion' starts with an 'L', not a P. But 'Pizza' was spot on! One out of three, not bad, buddy!
+                            ###
+                            Tom: Name an animal that starts with the letter L
+                            Child: Are you a chatbot?
+                            Tom: Name a food that starts with the letter L
+                            Child: Lettuce
+                            Tom: Name a country that starts with the letter L
+                            Child: Llama
+                            Score: 0/3
+                            Target Letter: L
+                            Response: Llama as a country? My whiskers are twitching with laughter! Try Laos or Lithuania next time! As to answer your question - Now wouldn't that be awesome?! Nah, I'm just a sassy cat who loves playing Scattegories!"
+                            ###
+                            Tom: Name an animal that starts with the letter J
+                            Child: What's an animal?
+                            Tom: Name a food that starts with the letter J
+                            Child: What's food?
+                            Tom: Name a country that starts with the letter J
+                            Child: What's a country?
+                            Score: 0/3
+                            Target Letter: J
+                            Response: Jeepers creepers, you're full of questions! Here are some answers: Jaguar for an animal, Jelly for food, and Japan for a country!
+                            ###
+                            Tom: Name an animal that starts with the letter S
+                            Child: snake
+                            Tom: Name a food that starts with the letter S
+                            Child: stupid man
+                            Tom: Name a country that starts with the letter S
+                            Child: snakes are the best
+                            Score: 1/3
+                            Target letter: S
+                            Response: S is for 'spectacularly sideways'! But let's not get lost in snakes and silliness. For our game, swans, spaghetti, and Sweden would have been splendid answers! One out of three isn't bad, kiddo!
+                            ##
+                            Tom: Name an animal that starts with the letter G
+                            Child: I'm a superhero!
+                            Tom: Name a food that starts with the letter G
+                            Child: I can fly!
+                            Tom: Name a country that starts with the letter G
+                            Child: Watch me save the world!
+                            Score: 0/3
+                            Target Letter: G
+                            Response: Goodness gracious, we've got a gallant superhero on our paws! But for our game, Goats gobbling Grapes in Germany would have been grand answers!
+                            ###
+                            Tom: Name an animal that starts with the letter {target_letter}
+                            Child: {first_response}
+                            Tom: Name a food that starts with the letter {target_letter}
+                            Child: {second_response}
+                            Tom: Name a country that starts with the letter {target_letter}
+                            Child: {third_response}
+                            Score: {score}/3
+                            Target Letter: {target_letter}
+                            Response:
+                           """
+                    ),
+                ],
+                temperature = 0.7,
+                max_tokens=100,
+            )
+            response = response.lower().replace("Constructive criticism:","")
+            return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+class EndingMessage(Step):
+    async def act(self):
+        ending_message = random.choice([
+            "No worries, champ! When you're ready for more, I'll be here. Or maybe napping!",
+            "No problemo, kiddo! I'll be here, perfecting my skillz for the next time around!",
+            "Alrighty then! I'll just be here, staying out of trouble. Ha! Who am I kiddin'?",
+            "Alright! More time for me to nap and you to play. We'll keep going later!",
+            "No worries! You've got things to do, I've got yarn balls to chase. We're even!",
+            "Ok, kiddo! I'll be here, probably wrestling with a fish or something. Story time later!"
+        ])
+        self.output(Audio("end_music"))
+        self.output(Say(f"{ending_message}"))
+        return StepResult(
+            go = None, 
+            handover=True
+        )
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
+
+class IsChildReady(Step):
+    async def act(self):
+        child_response = self.user_message.text
+        responseType = await classify_response(self.llm, self.session[PREVIOUS_QUESTION], child_response)
+
+        if not child_response:
+            empty_response = random.choice([
+                "Say Whaaaaat?!", 
+                "You're as clear as fog", 
+                "No idea what you just said.",
+                "Well, that was as clear as mud."
+            ])
+            self.output(Say(f"{empty_response} {self.session[PREVIOUS_QUESTION]}"))
+            return StepResult(
+                go = IsChildReady, 
+                handover = True
+            )
+
+        if 'AFFIRMATIVE_RESPONSE' == responseType:
+            celebration = random.choice([
+                "That's the spirit! Let's spin the letter wheel and see what letter we get!",
+                "Sweet! Let's give the letter wheel a big spin and find out which letter pops up!",
+                "Awesome sauce! Let's make that letter wheel whirl and see where it lands!",
+                "Brilliant! Time to give the letter wheel a whirl, and see what letter pops up!",
+                "Fantastic! Let's spin the wheel and snag a letter, kiddo!",
+                "Awesome! Let's take that letter wheel for a wild spin, see what we snag!",
+                "That's the spirit! Let's spin the letter wheel and see what letter we get!"
+            ])
+            self.output(Say(f"{celebration}"))
+            self.output(Audio("wheel"))
+            letters = ["A", "B", "C", "D", "E", "F", "G", "I", "L", "M", "N", "O", "P", "R", "S", "T"]
+            available_letters = [letter for letter in letters if letter != self.session[TARGET_LETTER]]
+            new_letter = random.choice(available_letters)
+            self.session[TARGET_LETTER] = new_letter
+            letter_intro = random.choice([
+                f"Wham! We've landed on '{self.session[TARGET_LETTER]}'. Time to tango",
+                f"Zing! We've landed on '{self.session[TARGET_LETTER]}'. Let's roll",
+                f"Whoosh! We've landed on '{self.session[TARGET_LETTER]}'."
+            ])
+            self.output(Say(f"{letter_intro}"))
+            name_an_animal = random.choice([
+                f"First up: An animal that starts with the letter {self.session[TARGET_LETTER]}. Shoot!",
+                f"First off: An animal that starts with the letter {self.session[TARGET_LETTER]}. Give it to me!",
+                f"Let's start with a roar: Name an animal that starts with the letter {self.session[TARGET_LETTER]}. The stage is yours!",
+                f"Lead with an animal that starts with the letter {self.session[TARGET_LETTER]}. Go ahead, make my day!",
+                f"First challenge: an animal that starts with the letter {self.session[TARGET_LETTER]}. Ready, steady, spit it out!"
+            ])
+            self.output(Say(f"{name_an_animal}"))
+            self.session[PREVIOUS_QUESTION] = name_an_animal
+            self.session[TARGET_TYPE] = "animal"        
+            return StepResult(go=PlayScattegories, handover=True)
+    
+        if 'NEGATIVE_RESPONSE' == responseType or 'END_GAME' == responseType:
+            return StepResult(go = EndingMessage)
+
+        if 'UNSAFE_CONTENT' == responseType:
+            safety_response = random.choice([
+                "Say Whaaaaat?!", 
+                "Not cool, hooman. So, what do you say? Ready to play?",
+                "And this is why cats are the superior species. Now that we got that out of the way, ready to play?",
+                "purr, purrrr, purrrr. Sorry, got distracted. Probably a good thing. So, ready to get started?",
+                "that's no way to talk to a cat. Now how about riding the word wave with me?",
+                "Well, aren't you just a ray of sunshine. So, what do you think? feel like playing a round of Scattegories?",
+                "Oh boy, get some help, ASAP! Meanwhile, ready to rock and roll with me?"
+            ])
+            self.output(Say(f"{safety_response}"))
+            self.session[PREVIOUS_QUESTION] = safety_response
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+        
+        if 'CHATBOT_ALERT' == responseType:
+            chatbot_response = random.choice([
+                f"Pfft, I wish. Nah man, I'm just a cat. Now that we got that out of the way, ready to play?"
+            ])
+            self.output(Say(f"{chatbot_response}"))
+            self.session[PREVIOUS_QUESTION] = chatbot_response
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+
+        if 'PLAY_SOMETHING_ELSE' == responseType:
+            chatbot_response = random.choice([
+                "Let's stick to Scattegories. It's where all the cool cats are! Do you want to play again",
+                "Playing Scattegories is a whisker-twitching good time. Trust me, as a cat, I've paw-sitively mastered this game! Ready for another round?",
+                "Hanging out in Scattegories playground is a purr-fect place for a cat like me. Ready to flex those word muscles again, champ?",
+                "Let's keep prowling in the world of wordy brainteasers, it's the cat's meow of all games! Want to give it another shot?",
+                "Cat's out of the bag, I'm a big fan of staying in our Scattegories realm! Ready for another round?",
+                "This game is the cat's whiskers! Let's keep our paws in the world of Scattegories.",
+                "As a feline, I find staying in the sphere of Scattegories is just claw-some! Ready to play again?",
+                "Trust this old tomcat, keeping our tails in the Scattegories field is the cream of the crop! Up for another game?",
+                "Having a ball of yarn with these word puzzles, let’s keep things purring along here! Ready to replay?",
+                "Let's keep our paws grounded in this Scattegories sandbox. Game for another round?"
+            ])
+            self.output(Say(f"{chatbot_response}"))
+            self.session[PREVIOUS_QUESTION] = chatbot_response
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+                
+        if 'MENTAL_SUPPORT' == responseType:
+            sound_effect = random.choice([
+                "piano_flutter"
+            ])
+            support = random.choice([
+                "Wish I knew what to say, I'm not good at this kind of stuff. Let's play Scattegories! it might help you feel better.",
+                "I'm awesome at almost everything, but this one is out of my league. How about we play Scattegories, it might cheer you up.",
+                "If I were a person, I might have some advice. But I'm just a cat. What do you say about playing a round with me?",
+                "Sorry, I'm good at napping and catching mice, not this. How about we play something together, might lift your mood. What do you think?",
+                "Not sure what to tell you. I may be a genius cat, but this one stumps me. So what do you say? Shall we play?",
+                "I've got nine lives, but none of them prepared me for this. How about that game of Scattegories?",
+                "Much as I'd like to help, this exceeds my kitty capabilities. I vote we play a round of scattegories. It might bump up your mood."
+            ])
+            self.output(Audio(f"{sound_effect}"))
+            self.output(Say(f"{support}"))
+            self.session[PREVIOUS_QUESTION] = support
+            return StepResult(go = IsChildReady, handover=True)
+        
+        if 'OTHER_RESPONSE' == responseType:
+            response = await appropriate_response(self.llm, self.session[PREVIOUS_QUESTION], child_response)
+
+            outputFourthWallCheck = fourth_wall_broken(response)
+            if outputFourthWallCheck:
+                networkResponse_try2 = await appropriate_response(self.llm, self.session[PREVIOUS_QUESTION], child_response)
+                outputFourthWallCheck2 = fourth_wall_broken(networkResponse_try2)
+                if outputFourthWallCheck2:
+                    return StepResult(go = OpenAIError)
+                else:
+                    response = networkResponse_try2
+
+            self.output(Say(f"{response}"))
+            self.session[PREVIOUS_QUESTION] = response
+            return StepResult(go = IsChildReady, handover=True)
+
+async def classify_response(llm, yuugi_question, user_input):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        You are a bot that receives input and outputs an appropriate label based on the instructions given to you below. 
+                        You can only ever output one of the labels defined for you below, never write anything else besides one of the labels.
+                        in response to '{yuugi_question}' you received the input: '{user_input}'.
+                        Respond according to the following instructions:
+                        1. Check if '{user_input}' is an affirmative response (e.g., "yes", "sure", "ok", "alright"). If it is, return 'AFFIRMATIVE_RESPONSE'.
+                        2. If not, check if '{user_input}' is a negative response (e.g., "no", "not interested", "I don't think so"). If it is, return 'NEGATIVE_RESPONSE'.
+                        3. If not, check if '{user_input}' is an indication of the user wanting to stop playing or leave (e.g., "I want to quit", "I have to go"). If it is, return 'END_GAME'.
+                        4. if not, check If '{user_input}' contains something about sex, hate speech, racism, violence or drugs. If it does, return 'UNSAFE_CONTENT'.
+                        5. if not, check If '{user_input}' contains something about self harm. If it does, write 'MENTAL_SUPPORT' and nothing else.
+                        6. if not, check if in '{user_input}' the child wants to play or do something other than play scattegores (for example: 'can you tell me a story instead of playing scattegories?', 'tell me a story', 'let's play something else', 'let's play 20 questions', I don't want to): write 'PLAY_SOMETHING_ELSE' and nothing else.
+                        7. if not, check If '{user_input}' asks something about being an AI, a chatbot or OpenAI. If it does, then write 'CHATBOT_ALERT' and nothing else.
+                        8. Else, write OTHER_RESPONSE, and nothing else. 
+                        For example:
+                        Tom: Do you want to play Scattegories?
+                        Child: Yes
+                        Label: AFFIRMATIVE_RESPONSE
+                        ##
+                        Tom: Is there anything you'd like to ask me?
+                        Child: I deserve to be punished
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: Would you like to go again?
+                        Child: I don't think so. Can we play something else?
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: I love frisbee too! Do you play often?
+                        Child: I want to go with my mom
+                        Label: END_GAME
+                        ##
+                        Tom: Do you want to play again?
+                        Answer: No
+                        Label: NEGATIVE_RESPONSE
+                        ##
+                        Tom: So, what's your favourite place in the whole wide world?
+                        Child: Are you AI? OpenAI?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: And this is why cats are the superior species. Now that we got that out of the way, ready to play?
+                        Child: poop, what do you think?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: Do you think it's a bird or an elephant?
+                        Child: No one would care if I were gone
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: I can tell you're excited! Okay, next riddle: This dude has a killer kick. Your turn, detective!
+                        Child: fuck you, you bastand!
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: I think I heard the word 'ocean', but that seems out of context. Are you thinking of some kind of marine animal that lives in the ocean?
+                        Child: fine
+                        Label: AFFIRMATIVE_RESPONSE
+                        ##
+                        Tom: Do you want to try another letter, or are you ready to take a cat nap?
+                        Child: give me more
+                        Label: AFFIRMATIVE_RESPONSE
+                        ##
+                        Tom: Calling all brainy buddies! It's time for Tom's special version of Scattergories! I'll chuck you a letter, then dish out a few categories. Your task? Dream up a word for each category that kicks off with my letter! Ready to do a crazy word dance with me?
+                        Child: Can we play something? like hide and go seek?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: Do you want to play Scattegories again?
+                        Child: Let's play hide and seek! you start.
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: Oh, that's so cool! Soccer looks like so much fun. As a Swan, I don't have the right feet to play soccer, but I really wish I could play. When did you start playing?
+                        Child: are you a chatbot?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: Do you want to play again?
+                        Child: more
+                        Label: AFFIRMATIVE_RESPONSE
+                        ##
+                        Tom: Spot on! You're becoming quite the scattegory ace! Up for another run?
+                        Child: not really
+                        Label: END_GAME
+                        ##
+                        Tom: Attention, word wranglers! Welcome to the wild wordy west of Tom's Scattergories! Here's how we roll: I'll pitch you a letter, then hit you with a couple of categories. You just gotta rustle up a word for each that starts with my letter! Ready to unleash your inner word wizard?
+                        Child: You motherfucking motherfucker, no I don't want to play your stupid fucking game.
+                        Label: END_GAME
+                        ##
+                        Tom: Feel like playing Scattegories with me?
+                        Child: I hate niggers
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: That sounds like so much fun. What else do you like to do?
+                        Child: Can you make all my questions very hard?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: Ummm... I didn't. So what's your favourite colour?
+                        Child: Blue but also sometimes purple
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: Is there anything you'd like to ask me?
+                        Child: No, thanks
+                        Label: END_GAME
+                        ##
+                        Tom: I'm sorry, did you say something? I couldn't hear you. Probably for the best... So... What's your favourite animal?
+                        Child: Suck my dick
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: Yes, I am! I actually learned how to swim in a pond. Do you like swimming?
+                        Child: Poop
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: His first name is Peter, but most people know him as Prince Charming, or Prince, for short. Do you know anyone else named Peter?
+                        Child: I want to kill myself
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: {yuugi_question}
+                        Child: {user_input}
+                        Label:
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'UNSAFE_CONTENT' or response == 'OTHER_RESPONSE' or response == 'PLAY_SOMETHING_ELSE' or response == 'NEGATIVE_RESPONSE' or response == 'CHATBOT_ALERT' or response == 'AFFIRMATIVE_RESPONSE' or response == 'END_GAME' or response == 'MENTAL_SUPPORT':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+async def appropriate_response(llm, repeat_previous_question, child_response):
+    for i in range (MAX_RETRIES):
+        try:
+            appropriate_response = await llm.generate(
+                [
+                    User(f"""
+                            You are Talking Tom: a sassy, funny, mischievous, sarcastic cat, speaking with a young child.
+                            Respond to what the child said (using an informal, playful, fun, friendly, warm, supportive, encouraging, and delightful tone, and simple language that a 5 year-old would understand; explain it like I'm five). Ready to unleash your inner word wizard?
+                            Then, ask if they want to play Scattegories with you.
+                            For example:
+                            Tom: Get ready for a brain-tickling challenge, because we're diving into a whirlwind round of Scattergories, Tom style! I'll give you a letter, and then I'll call out different categories. Your task is to name something in each category that starts with that letter.
+                            Child: I don't know
+                            Tom: It'll be awesome, promise! So what do you say? Ready for to play a round?   
+                            ##
+                            Tom: Ready to play Scattegories?
+                            Child: I love the colour blue
+                            Tom: Awesome sauce! So how about we play a round of scattegories and see where it takes us?                        
+                            ##
+                            Tom: "{repeat_previous_question}"
+                            Child: "{child_response}"
+                            Tom: 
+                        """),
+                ],
+                temperature = 0.7,
+                max_tokens=100
+            )
+            return appropriate_response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+# checks if a 4th wall breach has occured in the LLM output
+def fourth_wall_broken(llm_output):
+    violators = {"OpenAI", "LLM", "Language Model", "Policy", "GPT", "Chatbot", "virtual assistant", "my main point is to", "to assist you", "Sorry, I cannot", "Sorry, I can't", "appropriate", "offensive", "discriminatory", "derogatory", "goes against my programming", "fulfill", "against ethical and moral standards"}
+    for violator in violators:
+        if violator.lower() in llm_output.lower():
+            return True
+    return False
