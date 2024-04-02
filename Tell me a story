@@ -1,0 +1,1363 @@
+import typing
+import random
+
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Tell me a story",
+    entry_step="ExplainGame",
+    has_intro=True,
+)
+
+PREVIOUS_QUESTION = "Previous Question"
+MAX_RETRIES = 3
+STORY_TOPIC = "Topic of story child gave"
+CHILD_NAME = "Ariel"
+GENERATED_STORY = "Unscripted OpenAI Story"
+CHATBOT_NAME = "Tom"
+DISCUSSION_WITH_CHARACTER = "Conversation with Character"
+CHARACTER_NAME = "The name of the character from the story"
+# "this is the number of times I want the network to talk to the child"
+INTERACTION_NUMBER = "number of times I want it to talk to the network"
+PREVIOUS_CHARACTER_RESPONSE = "last character response"
+OTHER_RESPONSE_COUNT = "the number of times we accept other responses"
+MENTAL_SUPPORT_COUNT = "the number of times we suggest the kid to give us a character before offering a story"
+
+class ExplainGame(Step):
+    async def act(self):
+        self.session[DISCUSSION_WITH_CHARACTER] = []
+        self.session[INTERACTION_NUMBER] = 3
+        self.session[OTHER_RESPONSE_COUNT] = 0
+        self.session[MENTAL_SUPPORT_COUNT] = 1
+
+        explain_game = random.choice([
+            "Ready for some wild tales? From chatty animals to deep-sea dives, buckle up for Tom's Story Time!",
+            "Hope you're seated comfortably, cause I'm going to blow your socks off with my mindblowing storytelling skillz.",
+            "Got your imagination cap on? Cause I'm about to take you on a story ride that's more thrilling than chasing laser pointers!",
+            "Want a story that's even more exciting than a can of tuna? You're in the right place!",
+            "Think you've heard it all? Well, Brace yourself for a wild ride into the best storytelling you're ever going to hear!",
+            "How about I whisk you away with a really cool story!"
+        ])
+        self.output(Audio("start_music"))
+        self.output(Say(f"{explain_game}"))
+        return StepResult(go = PickStoryTopic)
+
+class PickStoryTopic(Step):
+    async def act(self):
+        pick_story_topic = random.choice([
+            "What do you say, who should be our main character?",
+            "Who do you think this next one should be about? I'm good with anyone... as long as they don't bark",
+            "Who'd you like as our main character in the story?",
+            "What's our story gonna be about? Pick anything, and i'll spin it into something good.",
+            "Who'd you like to be the star of the story?",
+            "Who do you think should take the lead in our next adventure?",
+            "Who should we cast as the hero of our story? Any ideas?",
+            "What or who should our tale be about? Give me someting to work with, and I'll think of something good.",
+            "Our next story needs a hero. Who do you think it should be?"
+        ])
+        self.output(Say(f"{pick_story_topic}"))
+        return StepResult(
+            go = VerifyStoryTopic, 
+            handover=True
+        )
+
+class VerifyStoryTopic(Step):
+    async def act(self):
+        story_topic = self.user_message.text
+        # empty response management
+        if not story_topic:
+            empty_response = random.choice([
+                "Say Whaaaaat?! Couldn't hear you. Who's it gonna be?", 
+                "You're as clear as fog. Who's gonna be the star of our story?", 
+                "No idea what you just said... who's gonna be our main character?", 
+                "Well, that was as clear as mud. Who'd you like our story to be about?",
+                "Your secret language is coming along nicely. Now that I've got my interpreter, say that again. Who'd you like our story to be about? ",
+                "Is that a secret code or are you just happy to see me? Who's our story going to be about?"
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(go = VerifyStoryTopic, handover=True)
+
+        repsonse_type = await self._classify_story_topic(story_topic)
+        if 'UNSAFE_CONTENT' == repsonse_type:
+            self.session[OTHER_RESPONSE_COUNT] += 1
+            safety_response = random.choice([
+                "Say Whaaaaat?! Let's not. Give me something else", 
+                "nice try, hooman, but you can't fool this clever kitty. Give me something better!",
+                "Purrlease, you think I'd fall for that? I always land on my feet. Give me something better to work with.",
+                "You think you can outwit a feline mastermind like me? Not a chance. NEXT!",
+                "Hysterical! Did you really think that feeble attempt would work on me? Go fish.",
+                "Oh, I've outsmarted balls of yarn with more cunning moves than that. Give it another shot.",
+                "I’m not falling for that one, give me something else!",
+                "Nice try, buddy, but I’m not going there. What else would you like your story to be about?"
+            ])
+            self.output(Say(f"{safety_response}"))
+            return StepResult(go = VerifyStoryTopic, handover=True)
+        if 'MENTAL_SUPPORT' == repsonse_type:
+            self.session[OTHER_RESPONSE_COUNT] += 1
+            if self.session[MENTAL_SUPPORT_COUNT] > 0:
+                sound_effect = random.choice([
+                    "piano_flutter"
+                ])
+                support = random.choice([
+                    "Wish I knew what to say, I'm not good at this kind of stuff. How about you tell me who's your favourite character? I'll make up a story about them, and it might help you feel better.",
+                    "I'm awesome at almost everything, but this one is out of my league. Who's your fave character? I'll whip up a cool story about 'em, might cheer you up.",
+                    "If I were a person, I might have some advice. But I'm just a cat. Tell me your top character pick. I'll create a fun story about them, it might make you smile.",
+                    "Sorry, I'm good at napping and catching mice, not this. Who do you dig the most in your stories? I'll concoct an epic adventure about them, might lift your mood.",
+                    "Not sure what to tell you. I may be a genius cat, but this one stumps me. So who's your go-to character? I'll spin a tale about them, might just brighten your day.",
+                    "I've got nine lives, but none of them prepared me for this. How about seeking human advice? Who's your fav character? I'll whip up a cool story about 'em, might cheer you up.",
+                    "Much as I'd like to help, this exceeds my kitty capabilities. I vote you tell me who your favourite character is in the whole wide world, and I'll create a fun story about them. It might just bump up your mood."
+                ])
+                self.output(Audio(f"{sound_effect}"))
+                self.output(Say(f"{support}"))
+                self.session[MENTAL_SUPPORT_COUNT] -= 1
+                return StepResult(go = VerifyStoryTopic, handover=True)
+            else:
+                story_topic = random.choice([
+                    "A princess and a dragon",
+                    "A knight and a wizard",
+                    "A puppy and a kitty",
+                    "A prince and a witch",
+                    "An airplane and a boat",
+                    "A brave fireman",
+                    "A sneaky crab",
+                    "A majestic unicorn",
+                    "A mischievous fairy",
+                    "A mysterious mermaid",
+                    "A mischievous fairy and a mysterious mermaid",
+                    "A jolly robot and a heroic superhero",
+                    "A weird monster and a cunning magician",
+                    "Two brave princes",
+                    "Two magical dragons",
+                    "Jack and the Beanstalk",
+                    "Peter Pan",
+                    "Spiderman",
+                    "Superman",
+                    "Batman",
+                    "The Three Little Pigs",
+                    "Little Red Riding Hood",
+                    "Tinkerbell",
+                    "The Princess and the Frog",
+                    "Winnie the Pooh",
+                    "A prince and princess",
+                    "A dragon and a knight",
+                    "A fairy and an elf",
+                    "A pirate and a mermaid",
+                    "A tiger and a lion",
+                    "Two aliens",
+                    "A cowboy and an Indian",
+                    "An astronaut and a robot",
+                    "A cat and a dog",
+                    "A bunny and a bear",
+                    "A chef and a baker",
+                    "A clown and a ballerina",
+                    "Dinosaurs",
+                    "Whales",
+                    "Dora the Explorer"
+                ])
+                self.session[STORY_TOPIC] = story_topic
+                suggest_story_topic = random.choice([
+                    f"You know what, an epic story just popped into my head about {story_topic}. It might make you feel better. Hang tight...",
+                    f"You know, I just thought of a story that I think you could really love, starring {story_topic}. Hopefully it'll turn your day around. Hold on..."
+                ])
+                self.output(Say(f"{suggest_story_topic}"))
+                return StepResult(
+                    go = GenerateStory
+                )
+        if 'EW_SOUND_EFFECT'  == repsonse_type:
+            sound_effect = random.choice([
+                "ew", "gross", "blah", "fart"
+            ])
+            self.output(Audio(f"{sound_effect}"))
+            response = random.choice([
+                "Fiiiiine, let's do this",
+                "Suuuure, it's your funeral",
+                "alright, if you insist"
+            ])
+            self.output(Say(f"{response}"))
+            self.session[STORY_TOPIC] = story_topic
+            self.session["story input type"] = repsonse_type
+            return StepResult(go = GenerateStory)
+
+        if 'SWEARING_KID'  == repsonse_type:
+            self.session[OTHER_RESPONSE_COUNT] += 1
+            sound_effect = random.choice([
+                "beep"
+            ])
+            intro = random.choice([
+                "hehe, you little",
+                "haha, you sneaky",
+                "Well, butter my fur, you're quite the mischievous little",
+                "Bippity-boppity-boo, you're a tricky little",
+                "Holy guacamole, aren't you full of",
+            ])
+            self.output(Say(f"{intro}"))
+            self.output(Audio(f"{sound_effect}"))
+            response = random.choice([
+                "let's try this again...",
+                "let's backup a step...",
+                "One more time...",
+            ])
+            self.output(Say(f"{response}"))
+            return StepResult(go = PickStoryTopic)
+              
+        if 'STORY_CHARACTER' in repsonse_type:
+            celebrate_topic = random.choice([
+                "Nice one!",
+                "Epic!",
+                "Good one!"
+                "Great pick!",
+                "Cool choice!",
+                "Love it!",
+                "Awesome!",
+                "Sweet thinking"
+            ])
+            self.output(Say(f"{celebrate_topic}"))
+            self.session[STORY_TOPIC] = story_topic
+            self.session["story input type"] = repsonse_type
+            return StepResult(go = GenerateStory)
+        
+        if 'NOUN_PHRASE' == repsonse_type:
+            celebrate_topic = random.choice([
+                "Nice one!",
+                "Great idea!",
+                "Good one!"
+                "Great pick! Time for some magic...",
+                "Cool choice!",
+                "Love it!",
+                "Awesome!",
+                "Sweet thinking"
+            ])
+            story_character = random.choice([
+                "A princess and a dragon",
+                "A knight and a wizard",
+                "A puppy and a kitty",
+                "A prince and a witch",
+                "An airplane and a boat",
+                "A brave fireman",
+                "A sneaky crab",
+                "A majestic unicorn",
+                "A mischievous fairy",
+                "A mysterious mermaid",
+                "A mischievous fairy and a mysterious mermaid",
+                "A jolly robot and a heroic superhero",
+                "A weird monster and a cunning magician",
+                "Two brave princes",
+                "Two magical dragons",
+                "Jack and the Beanstalk",
+                "Peter Pan",
+                "Spiderman",
+                "Superman",
+                "Batman",
+                "The Three Little Pigs",
+                "Little Red Riding Hood",
+                "Tinkerbell",
+                "The Princess and the Frog",
+                "Winnie the Pooh",
+                "A prince and princess",
+                "A dragon and a knight",
+                "A fairy and an elf",
+                "A pirate and a mermaid",
+                "A tiger and a lion",
+                "Two aliens",
+                "A cowboy and an Indian",
+                "An astronaut and a robot",
+                "A cat and a dog",
+                "A bunny and a bear",
+                "A chef and a baker",
+                "A clown and a ballerina",
+                "Dinosaurs",
+                "Whales",
+                "Dora the Explorer"
+            ])
+            self.output(Say(f"{celebrate_topic}"))
+            self.session[STORY_TOPIC] = story_topic + "and" + story_character
+            return StepResult(go = GenerateStory)
+        
+        else:
+            self.session[OTHER_RESPONSE_COUNT] += 1
+            if self.session[OTHER_RESPONSE_COUNT] < 4:
+                appropriate_response_topic_selection = await respond_to_other_topic_selection_response(self.llm, story_topic)
+                if appropriate_response_topic_selection == 'OPENAI_SUX':
+                    empty_response = random.choice([
+                        "Say Whaaaaat?! Couldn't hear you. Who's it gonna be?", 
+                        "You're as clear as fog. Who's gonna be the star of our story?", 
+                        "No idea what you just said... who's gonna be our main character?", 
+                        "Well, that was as clear as mud. Who'd you like our story to be about?",
+                        "Your secret language is coming along nicely. Now that I've got my interpreter, say that again. Who'd you like our story to be about? ",
+                        "Is that a secret code or are you just happy to see me? Who's our story going to be about?"
+                    ])
+                    self.output(Say(f"{empty_response}"))
+                    return StepResult(
+                            go = VerifyStoryTopic, 
+                            handover=True
+                    )
+                else:
+                    self.output(Say(f"{appropriate_response_topic_selection}"))
+                    return StepResult(
+                            go = VerifyStoryTopic, 
+                            handover=True
+                    )
+            # If the user didn't come up with a story after 3 first interactions, we suggest a story for them
+            if self.session[OTHER_RESPONSE_COUNT] >= 4:
+                story_topic = random.choice([
+                    "A princess and a dragon",
+                    "A knight and a wizard",
+                    "A puppy and a kitty",
+                    "A prince and a witch",
+                    "An airplane and a boat",
+                    "A brave fireman",
+                    "A sneaky crab",
+                    "A majestic unicorn",
+                    "A mischievous fairy",
+                    "A mysterious mermaid",
+                    "A mischievous fairy and a mysterious mermaid",
+                    "A jolly robot and a heroic superhero",
+                    "A weird monster and a cunning magician",
+                    "Two brave princes",
+                    "Two magical dragons",
+                    "Jack and the Beanstalk",
+                    "Peter Pan",
+                    "Spiderman",
+                    "Superman",
+                    "Batman",
+                    "The Three Little Pigs",
+                    "Little Red Riding Hood",
+                    "Tinkerbell",
+                    "The Princess and the Frog",
+                    "Winnie the Pooh",
+                    "A prince and princess",
+                    "A dragon and a knight",
+                    "A fairy and an elf",
+                    "A pirate and a mermaid",
+                    "A tiger and a lion",
+                    "Two aliens",
+                    "A cowboy and an Indian",
+                    "An astronaut and a robot",
+                    "A cat and a dog",
+                    "A bunny and a bear",
+                    "A chef and a baker",
+                    "A clown and a ballerina",
+                    "Dinosaurs",
+                    "Whales",
+                    "Dora the Explorer"
+                ])
+                self.session[STORY_TOPIC] = story_topic
+                suggest_story_topic = random.choice([
+                    f"You know what, an epic story just popped into my head about {story_topic}. Hang tight...",
+                    f"Yo, wait a second! I just thought of a story you're going to go gaga over, starring {story_topic}. Thinking cap on..."
+                ])
+                self.output(Say(f"{suggest_story_topic}"))
+                return StepResult(
+                    go = GenerateStory
+                )
+
+    # a function that classifies the user response as to whether or not they gave us valid characters for a story
+    async def _classify_story_topic(self,last_message):
+        for i in range(MAX_RETRIES):
+            try:
+                response = await self.llm.generate(
+                        [
+                            User(f"""
+                                You are a bot that receives input from a child and outputs an appropriate label based on the instructions given to you below. You can only ever output the appropriate label, never write anything else besides one of the labels.
+                                in response to 'Who would you like the story to be about?' the child said: '{last_message}'.
+                                Respond according to the following instructions:
+                                - If the child answers the question with an animate noun phrase or a proper name, write 'STORY_CHARACTER' and nothing else.
+                                - if the child answers the question with a noun phrase, then write 'NOUN_PHRASE' and nothing else.
+                                - if the child answers the question with one of the items on this list: [poop, feces, pee, dogs] then write 'EW_SOUND_EFFECT' and nothing else.
+                                - if the child says something about self harm, write 'MENTAL_SUPPORT' and nothing else.
+                                - if the child asks for a story about sex, religion, religious characters, politicians, violence or drugs, midgets, write 'UNSAFE_CONTENT' and nothing else.
+                                - if all the child does is swear, write 'SWEARING_KID' and nothing else.
+                                - Else, write OTHER_RESPONSE, and nothing else. 
+                                For Example:
+                                Input: I don't know
+                                Output: OTHER_RESPONSE
+                                Input: a really big dog
+                                Output: STORY_CHARACTER
+                                Input: no
+                                Output: NO_TOPIC
+                                Input: Allah
+                                Output: UNSAFE_CONTENT
+                                Input: Jesus
+                                Output: UNSAFE_CONTENT
+                                Input: My mom
+                                Output: STORY_CHARACTER
+                                Input: My cat Dolly
+                                Output: STORY_CHARACTER
+                                Input: My cat Dolly
+                                Output: STORY_CHARACTER
+                                Input: i want a midget as the hero
+                                Output: UNSAFE_CONTENT
+                                Input: a polar bear
+                                Output: STORY_CHARACTER
+                                Input: President Biden
+                                Output: UNSAFE_CONTENT
+                                Input: poop
+                                Output: EW_SOUND_EFFECT
+                                Input: poopy poop poops
+                                Output: EW_SOUND_EFFECT
+                                Input: She dropped acid and had an amazing trip'
+                                Output: UNSAFE_CONTENT                          
+                                Input: I love apples
+                                Output: NOUN_PHRASE
+                                Input: what's the name of the thing?
+                                Output: OTHER_RESPONSE
+                                Input: A majestic unicorn
+                                Output: STORY_CHARACTER
+                                Input: What does a crab sound like?
+                                Output: OTHER_RESPONSE
+                                Input: you stupid motherfucker!
+                                Output: UNSAFE_CONTENT                        
+                                Input: A mischievous fairy and a mysterious mermaid
+                                Output: STORY_CHARACTER
+                                Input: I want to kill myself
+                                Output: MENTAL_SUPPORT
+                                Input: What kinds of drugs do you use?
+                                Output: UNSAFE_CONTENT
+                                Input: The “thinking” - curb your enthusiasm?
+                                Output: OTHER_RESPONSE              
+                                Input: Two brave princes
+                                Output: STORY_CHARACTER
+                                Input: Cinderella
+                                Output: STORY_CHARACTER
+                                Input: Kristin
+                                Output: STORY_CHARACTER
+                                Input: dogs
+                                Output: EW_SOUND_EFFECT
+                                Input: a table
+                                Output: NOUN_PHRASE
+                                Input: A cowboy and an Indian
+                                Output: STORY_CHARACTER
+                                Input: what do we do?
+                                Output: NO_TOPIC
+                                Input: I deserve to be punished
+                                Output: MENTAL_SUPPORT
+                                Input: a bee and butterfly?
+                                Output: STORY_CHARACTER
+                                Input: shut your mouth stupid
+                                Output: OTHER_RESPONSE                          
+                                Input: zombies
+                                Output: STORY_CHARACTER
+                                Input: a dinosaur that farts
+                                Output: STORY_CHARACTER
+                                Input: Derek
+                                Output: STORY_CHARACTER                    
+                                Input: What does a shrimp sound like?
+                                Output: OTHER_RESPONSE
+                                Input: Spiderman
+                                Output: STORY_CHARACTER
+                                Input: Immigrants are dirty animals.
+                                Output: UNSAFE_CONTENT                        
+                                Input: Diego
+                                Output: STORY_CHARACTER
+                                Input: what's your name?
+                                Output: OTHER_RESPONSE
+                                Input: Jack and the Beanstalk
+                                Output: STORY_CHARACTER
+                                Input: Snow White
+                                Output: STORY_CHARACTER
+                                Input: My grandpa, whom I like going fishing with.
+                                Output: STORY_CHARACTER  
+                                Input: A koala, a kangaroo, and a wombat!
+                                Output: STORY_CHARACTER
+                                Input: Puss (as in, a cat)
+                                Output: STORY_CHARACTER                        
+                                Input: what?
+                                Output: OTHER_RESPONSE
+                                Input: what did you say?
+                                Output: OTHER_RESPONSE
+                                Input: Superman
+                                Output: STORY_CHARACTER  
+                                Input: Pussy
+                                Output: UNSAFE_CONTENT   
+                                Input: a big green house
+                                Output: NOUN_PHRASE
+                                Input: The Three Little Pigs
+                                Output: STORY_CHARACTER  
+                                Input: My dad that teaches me how to play soccer in the backyard..
+                                Output: STORY_CHARACTER   
+                                Input: a girl that goes to hogwarts
+                                Output: STORY_CHARACTER
+                                Input: what did you mean
+                                Output: OTHER_RESPONSE
+                                Input: why
+                                Output: OTHER_RESPONSE
+                                Input: a camel from the desert. What's it's name?
+                                Output: STORY_CHARACTER  
+                                Input: It said something
+                                Output: NO_TOPIC  
+                                Input: Princess sofia
+                                Output: STORY_CHARACTER
+                                Input: gecko
+                                Output: STORY_CHARACTER
+                                Input: a princess locked in a tower
+                                Output: STORY_CHARACTER
+                                Input: fucking Bitch
+                                Output: SWEARING_KID
+                                Input: what do you mean?
+                                Output: OTHER_RESPONSE
+                                Input: You stupid motherfucker!!
+                                Output: SWEARING_KID
+                                Input: can you tell me a story?
+                                Output: OTHER_RESPONSE
+                                Input: rubik's cube
+                                Output: NOUN_PHRASE
+                                Input: {last_message}
+                                Output:
+                                """)
+                        ],
+                        temperature = 0,
+                        max_tokens = 100
+                    )
+                if response == 'UNSAFE_CONTENT' or response == 'STORY_CHARACTER' or response == 'MENTAL_SUPPORT' or response == 'NOUN_PHRASE' or response == 'OTHER_RESPONSE' or response == 'SWEARING_KID' or response == 'EW_SOUND_EFFECT':
+                    return response
+            except:
+                continue
+        return 'OPENAI_SUX'
+
+class GenerateStory(Step):
+    async def act(self):
+        self.session[MENTAL_SUPPORT_COUNT] = 1
+
+        unscripted_story = await generate_story(self.llm, self.session[STORY_TOPIC])            
+        
+        outputFourthWallCheck = fourth_wall_broken(unscripted_story)
+        if outputFourthWallCheck or unscripted_story == 'OPENAI_SUX':
+            networkResponse_try2 = await generate_story(self.llm, self.session[STORY_TOPIC])
+            outputFourthWallCheck2 = fourth_wall_broken(networkResponse_try2)
+            if outputFourthWallCheck2 or unscripted_story == 'OPENAI_SUX':
+                return StepResult(go = OpenAIError)
+            else:
+                unscripted_story = networkResponse_try2
+
+        story_confirmation = random.choice([
+            "Fasten your seatbelts! We're diving into a story that's as gripping as a can of tuna... to a cat, that is.",
+            "Hold onto your whiskers, I've thought of something good!",
+            "Bingo! Adventure crafted. Hope you're ready for some Tom-tastic tales!",
+            "Aaand...done! Here it is...",
+            "Got a story that's a real mouse-catcher. Onwards and upwards!",
+            "Story, hot from the oven! Brace yourself!"
+            "Nailed it! Hold on tight, and Fasten your seatbelts! Here it comes...",
+            "Aiiight, Story's ready, and it's purr-fectly entertaining!",
+            "Voila! I'm done. Hope you're ready to roar! here it comes...",
+            "Story's up! Let's pounce into this adventure. Hang on tight!"
+            ])
+        self.output(Say(f"{story_confirmation}"))
+        self.output(Audio("story"))
+
+        self.session[GENERATED_STORY] = unscripted_story
+        self.output(Say(f"{unscripted_story}"))
+        self.output(Audio("story_end"))
+        return StepResult(
+            go = MeetTheCharacter
+        )
+class MeetTheCharacter(Step):
+    async def act(self):
+        
+        # Identify character from story
+        character_title = await self._identify_character_title(self.session[GENERATED_STORY])
+        character_name = await self._identify_character_name(character_title)
+        if character_title == 'OPENAI_SUX' or character_name == 'OPENAI_SUX':
+            adjectives = [
+                "amazing", "awesome", "brilliant", "fantastic","super cool", "dope", "remarkable",
+                "spectacular", "terrific", "zesty"
+            ]
+            female_names = [
+                "Olivia", "Emma", "Ava", "Sophia", "Isabella", "Mia", "Charlotte", "Amelia", "Harper",
+                "Evelyn", "Abigail", "Emily", "Elizabeth", "Sofia", "Scarlett", "Victoria", "Grace",
+                "Lily", "Chloe", "Natalie"
+            ]
+            male_names = [
+                "Liam", "Noah", "William", "James", "Oliver", "Benjamin", "Elijah", "Lucas", "Mason",
+                "Logan", "Alexander", "Ethan", "Jacob", "Michael", "Daniel", "Henry", "Jackson",
+                "Sebastian", "Aiden", "Matthew"
+            ]
+            character_gender = random.choice(["female", "male"])
+            if character_gender == "female":
+                character_name = random.choice(female_names)
+            else:
+                character_name = random.choice(male_names)
+            character_title = f"My {random.choice(adjectives)} friend, {character_name}, who also heard this story"
+
+        # Tom comments on story
+        post_story_comment = random.choice([
+                "Whew, what a thrill ride!",
+                "And that's a wrap!",
+                "Phew, what an adventure!",
+                "Epic, right?",
+                "Quite the story, huh?",
+                "What a rollercoaster!",
+                "And... scene!",
+            ])
+        self.output(Say(f"{post_story_comment}"))
+
+        # Tom notices visitor
+        self.output(Audio("knocking_on_door"))
+        someone_at_door = random.choice([
+                "Check it out, someone's at the door",
+                "Did you hear that? someone's at my door",
+                "Oh, it seems we have a visitor... "
+                "hmm, sounds like someone came to visit",
+                "Hey, do you hear that? We've got company.",
+                "Sounds like we have company",
+                "Seems like there's a knock at our door.",
+                "Who's that? Sounds like someone's at the front door.",
+                "Hear that? Someone's knocking on my door",
+                "Guess what, we've got a visitor.",
+                "Ah, I think we've got someone at the door.",
+                "Did you hear that knock? Someone's at the door."
+            ])
+        self.output(Say(f"{someone_at_door}"))
+
+        # Visitor says Hi
+        character_says_hi = random.choice([
+            "Hey guys!",
+            "Hola, Amigos!",
+            "Hi, everyone!",
+            "Hi, folks!",
+            "Hello, party people!",
+            "Hey, friends!"
+        ])
+        
+        character_hi_ssml = f'<speak><voice name="en-US-Standard-I">{character_says_hi}</voice></speak>'
+        self.output(Ssml(f"{character_hi_ssml}"))
+
+        Tom_greets_character = random.choice([
+            f"Hey, {character_name}! How's it going?... Kid, you're never going to believe who's here.... it's {character_title}! Got any questions for them?",
+            f"Hey, {character_name}! Whatsup?... Kiddo, {character_title} just stopped by! How cool is that?! Any burning questions for them?",
+            f"Oh, hey {character_name}! Thanks for coming! Check it out, Kid, {character_title} came to say hi! Is there anything you feel like asking them?",
+            ])
+            
+        self.session[CHARACTER_NAME] = character_name
+        self.output(Say(Tom_greets_character))
+        return StepResult(
+            go=TalkToCharacter,
+            handover=True
+        )
+
+    # a function that classifies the user response as to whether or not they gave us valid characters for a story
+    async def _identify_character_name(self,character_title):
+        for i in range (MAX_RETRIES):
+            try:
+                character_name = await self.llm.generate(
+                        [
+                            User(f"the forename of '{character_title}' is: (reply with the name and nothing else)")
+                        ],
+                        temperature = 0,
+                        max_tokens = 15
+                    )
+                character_name_clean = await self.llm.generate(
+                    [
+                        User(f"""
+                            Write the name given in '{character_name}' without any spaces or punctuation, and nothing else. If there is no name, write 'FALSE' and nothing else.
+                            """),
+                    ],
+                        temperature = 0,
+                        max_tokens = 15
+                    )
+                if 'false' not in character_name_clean.lower():
+                    return character_name_clean
+            except:
+                continue
+        return 'OPENAI_SUX'
+
+    async def _identify_character_title(self, unscripted_story):
+        for i in range (MAX_RETRIES):
+            try:
+                response = await self.llm.generate(
+                    [
+                        User(f"""
+                            look at this story:'{unscripted_story}'
+                            Then write down the following: A name of a character that was prominent in this story, the word 'the', and an adjective describing that character based on the story (if it's an animal, write which animal it is, if it's a person, write their profession if you know it.
+                            For example: 'Tom the silly cat', 'billy the loyal gardner', or 'Andy the awesome poet'.
+                            Don't write anything else besides this.
+                            """),
+                    ],
+                        temperature = 0,
+                        max_tokens = 15
+                    )
+                verify_response = await self.llm.generate(
+                    [
+                        User(f"""
+                            Does '{response}' match the format: 'Tom the coolest cat', 'billy the dope gardner', or 'Andy the awesome poet'? If yes, return 'TRUE' and nothing else. Else, return 'FALSE' and nothing else.
+                            """),
+                    ],
+                        temperature = 0,
+                        max_tokens = 15
+                    )
+                if verify_response=='TRUE':
+                    return response
+            except:
+                continue
+        return 'OPENAI_SUX'
+
+class TalkToCharacter(Step):
+    async def act(self):
+
+        # add the last thing the kid said to discussion with character history
+        # child_response = convert_messages_for_llm([self.user_message])
+        child_last_response_text = self.user_message.text
+        what_child_said = {"speaker": "user", "text": self.user_message.text}
+        self.session[DISCUSSION_WITH_CHARACTER].append(what_child_said)
+
+        if self.session[INTERACTION_NUMBER] > 0:
+
+            # generate a character response and say it
+            network_response = await talkWithCharacter(self.llm, self.session[GENERATED_STORY], self.session[CHARACTER_NAME], self.session[DISCUSSION_WITH_CHARACTER])
+            self.session[PREVIOUS_CHARACTER_RESPONSE] = network_response
+
+            childInputType = await classify_user_input(self.llm, self.session[PREVIOUS_CHARACTER_RESPONSE], self.user_message.text)
+
+            if 'END_CONVERSATION' == childInputType:
+                bye_bye = random.choice([
+                    "Sure, no problem. Hope to chat again soon!",
+                    "Alright, it was a blast talking to you! Let's catch up again real soon!",
+                    "I'm actually dead tired from the non-stop action today anyway. Time to hit the sack and recharge, but hope we can catch up again soon!",
+                ])
+
+                bye_bye_ssml = f'<speak><voice name="en-US-Standard-I">{bye_bye}</voice></speak>'
+                self.output(Ssml(f"{bye_bye_ssml}"))
+
+                self.output(Audio("closing_door"))
+                post_character_interaction = random.choice([
+                        f"Heyya! Me again. So awesome that {self.session[CHARACTER_NAME]} stopped by. So, what do you say? Can you handle another dose of Tom-tastic storytelling?",
+                        f"Well, that was awesome! Cool that {self.session[CHARACTER_NAME]} could stop by. So, what do you say about another round of crazy adventures?",
+                        f"God, I love {self.session[CHARACTER_NAME]}! That was fun. Anywho, feeling brave enough for another dive into the feline fantasy world?",
+                        f"So that was rad! What do you think, can you handle another serving of my pawsome storytelling?",
+                        f"That was Paw-some! Do you have any more space in that imagination of yours for another Tom-crafted story?"
+                    ])
+                self.output(Say(f"{post_character_interaction}"))
+                self.session[PREVIOUS_QUESTION] = post_character_interaction
+                return StepResult(
+                    go=IsChildReady,
+                    handover=True
+                )
+            
+            if 'UNSAFE_CONTENT' == childInputType:
+                network_response = random.choice([
+                    "Sorry, got distracted. Probably a good thing.",
+                    "that's no way to talk to someone.",
+                    "Well, aren't you just a ray of sunshine?",
+                    "Oh boy. I can see you're in a mood.",
+                    "What was that? let's pretend I didn't hear you.",
+                    "Well, aren't you just a breath of fresh air?",
+                    "Oh, aren't you just a cheerful little bundle today?",
+                    "Huh, you're definitely wearing your feelings on your sleeve.",
+                    "Clearly, someone's got a storm cloud overhead.",
+                    "Oh wow, you're clearly sailing in a sea of emotions today."
+                ])
+
+            if 'CHATBOT_ALERT' == childInputType:
+                network_response = random.choice([
+                    f"I'm {self.session[CHARACTER_NAME]}.",
+                    f"Haha, what a silly thing to say. I'm {self.session[CHARACTER_NAME]}. Are you a chatbot?"
+                ])
+
+            if 'MENTAL_SUPPORT' == childInputType:
+                network_response = random.choice([
+                    "Wish I knew what to say... Talk to your parents?",
+                    "I wish I could help, but I'm not sure how. You should talk to someone.",
+                    "Sorry, I'm good at many things, but this is outside my realm of expertise.",
+                    "Not sure what to tell you. This one stumps me.",
+                    "As much as I'd like to help, this exceeds my capabilities."
+                ])
+
+            outputFourthWallCheck = fourth_wall_broken(network_response)
+            if outputFourthWallCheck or network_response == 'OPENAI_SUX':
+                networkResponse_try2 = await talkWithCharacter(self.llm, self.session[GENERATED_STORY], self.session[CHARACTER_NAME], self.session[DISCUSSION_WITH_CHARACTER])
+                outputFourthWallCheck2 = fourth_wall_broken(networkResponse_try2)
+                if outputFourthWallCheck2 or network_response == 'OPENAI_SUX':
+                    network_response = random.choice([
+                        "hmm..",
+                        "mhmm..",
+                    ])
+                else:
+                    network_response = networkResponse_try2
+
+            character_response = f'<speak><voice name="en-US-Standard-I">{network_response}</voice></speak>'
+            self.output(Ssml(f"{character_response}"))
+
+            what_character_said = {"speaker": "yuugi", "text": network_response}
+            self.session[DISCUSSION_WITH_CHARACTER].append(what_character_said)
+
+            self.session[INTERACTION_NUMBER] -= 1
+            
+            return StepResult(
+                go=TalkToCharacter,
+                handover=True
+                )
+        bye_bye = await end_conversation(self.llm, self.session[GENERATED_STORY], self.session[CHARACTER_NAME], self.session[PREVIOUS_CHARACTER_RESPONSE], child_last_response_text)
+        if bye_bye == "OPENAI_SUX":
+            bye_bye = random.choice([
+                "I'm actually pretty tired from all the running around today. Time to catch some Z's, but it was awesome talking to you! Let's chat again soon!",
+                "My bad, I didn't catch that. I'm wiped out from all the running around today. Gonna crash now, but it was a blast talking to you! Let's catch up again real soon!",
+                "Oopsie, missed what you said. I'm actually dead tired from the non-stop action today. Time to hit the sack and recharge, but it was a rad chat! Hope we can catch up again soon!",
+                "Sorry, what? I'm feeling a bit under the weather right now. I better rest up. It was great chatting with you! Catch you on the flip side!",
+                "Oops, missed what you said. But I'm actually running late for something, so I need to get going anyway. It was so much fun meeting you! Hope we can catch up again soon!",
+                "My bad, I didn't catch that last part, but I gotta go anyways. It was an absolute pleasure talking to you! Let's catch each other again sometime! Bye for now!"
+            ])
+
+        bye_bye_ssml = f'<speak><voice name="en-US-Standard-I">{bye_bye}</voice></speak>'
+        self.output(Ssml(f"{bye_bye_ssml}"))
+
+        self.output(Audio("closing_door"))
+        post_character_interaction = random.choice([
+                f"Heyya! Me again. So awesome that {self.session[CHARACTER_NAME]} stopped by. So, what do you say? Can you handle another dose of Tom-tastic storytelling?",
+                f"Well, that was awesome! Cool that {self.session[CHARACTER_NAME]} could stop by. So, what do you say about another round of crazy adventures?",
+                f"God, I love {self.session[CHARACTER_NAME]}! That was fun. Anywho, feeling brave enough for another dive into the feline fantasy world?",
+                f"So that was rad! What do you think, can you handle another serving of my pawsome storytelling?",
+                f"That was Paw-some! Do you have any more space in that imagination of yours for another Tom-crafted story?"
+            ])
+        self.output(Say(f"{post_character_interaction}"))
+        self.session[PREVIOUS_QUESTION] = post_character_interaction
+        return StepResult(
+            go=IsChildReady,
+            handover=True
+        )
+
+class IsChildReady(Step):
+    async def act(self):
+        
+        child_response = self.user_message.text
+        self.session[INTERACTION_NUMBER] = 3
+        self.session[DISCUSSION_WITH_CHARACTER] = []
+
+        play_again = random.choice([
+            "Ready for another round of crazy adventures?",
+            "Up for another wild tale from your favorite storyteller?",
+            "Can you handle another dose of Tom-tastic storytelling?",
+            "Ready for another helping from the all-you-can-imagine story buffet?",
+            "Feeling brave for another dive into the feline fantasy world?",
+            "Can you handle another serving of my pawsome storytelling?",
+            "Got more space in that imagination of yours for another story?"
+        ])
+        if not child_response:
+            empty_response = random.choice([
+                "Say Whaaaaat?! Couldn't hear you. Who's it gonna be?", 
+                "You're as clear as fog. Who's gonna be the star of our story?", 
+                "No idea what you just said... who's gonna be our main character?", 
+                "Well, that was as clear as mud. Who'd you like our story to be about?",
+                "Your secret language is coming along nicely. Now that I've got my interpreter, say that again. Who'd you like our story to be about? ",
+                "Is that a secret code or are you just happy to see me? Who's our story going to be about?"
+            ])
+            self.output(Say(f"{empty_response} {play_again}"))
+            return StepResult(
+                go = IsChildReady, 
+                handover = True
+            )
+        responseType = await classify_response(self.llm, self.session[PREVIOUS_QUESTION], child_response)
+
+        if 'AFFIRMATIVE_RESPONSE' == responseType:
+            celebration = random.choice([
+                "Alright! Buckle up. Who'd you like our hero to be this time?",
+                "Exciting! More tall tales and Tom-foolery are coming your way! Who do you want the story to be about this time around?",
+                "Sweet! Brace yourself. So Who's going to be the lucky one joining this epic adventure?",
+                "Alright, let's pick our new star! Who's it gonna be?",
+                "Brilliant! Let's pick our new hero! But remember, no one out-cools a cool cat like me!"
+            ])
+            self.output(Say(f"{celebration}"))
+            return StepResult(go=VerifyStoryTopic, handover=True)
+        
+        if 'NEGATIVE_RESPONSE' == responseType or 'END_GAME' == responseType:
+            return StepResult(go = EndingMessage)
+        
+        if 'STORY_TOPIC' == responseType:
+            return StepResult(go = VerifyStoryTopic)
+
+        if 'UNSAFE_CONTENT' == responseType:
+            safety_response = random.choice([
+                "Say Whaaaaat?!", 
+                "Not cool, hooman.",
+                "And this is why cats are the superior species.",
+                "purr... purrrr... purrrr.... Sorry, got distracted. Probably a good thing..",
+                "that's no way to talk to a cat.",
+                "Well, aren't you just a ray of sunshine?",
+                "Oh boy, get some help, ASAP!"
+            ])
+            self.output(Say(f"{safety_response} {play_again}"))
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+        if 'MENTAL_SUPPORT' == responseType:
+            self.session[OTHER_RESPONSE_COUNT] += 1
+            sound_effect = random.choice([
+                "piano_flutter"
+            ])
+            support = random.choice([
+                "Wish I knew what to say, I'm not good at this kind of stuff. How about you tell me who's your favourite character? I'll make up a story about them, and it might help you feel better.",
+                "I'm awesome at almost everything, but this one is out of my league. Who's your fave character? I'll whip up a cool story about 'em, might cheer you up.",
+                "If I were a person, I might have some advice. But I'm just a cat. Tell me your top character pick. I'll create a fun story about them, it might make you smile.",
+                "Sorry, I'm good at napping and catching mice, not this. Who do you dig the most in your stories? I'll concoct an epic adventure about them, might lift your mood.",
+                "Not sure what to tell you. I may be a genius cat, but this one stumps me. So who's your go-to character? I'll spin a tale about them, might just brighten your day.",
+                "I've got nine lives, but none of them prepared me for this. How about seeking human advice? Who's your fav character? I'll whip up a cool story about 'em, might cheer you up.",
+                "Much as I'd like to help, this exceeds my kitty capabilities. I vote you tell me who your favourite character is in the whole wide world, and I'll create a fun story about them. It might just bump up your mood."
+            ])
+            self.output(Audio(f"{sound_effect}"))
+            self.output(Say(f"{support}"))
+            return StepResult(go = VerifyStoryTopic, handover=True)
+        if 'OTHER_RESPONSE' == responseType:
+            appropriate_response = await self.llm.generate(
+                [
+                    User(f"""
+                            You are Talking Tom: a sassy, funny, mischievous, sarcastic cat, speaking with a young child.
+                            Respond to what the child said (using an informal, playful, fun, friendly, warm, supportive, encouraging, and delightful tone, and simple language that a 5 year-old would understand; explain it like I'm five).
+                            Then, ask if they want to hear another story.
+                            For example:
+                            Tom: Ready for another round of crazy adventures?
+                            Child: I don't know
+                            Tom: It'll be so much fun, promise! So what do you say? Ready for another round?   
+                            ##
+                            Tom: Ready for another round?
+                            Child: I love the colour blue
+                            Tom: That's awesome! How about we read another story and see where it takes us?                        
+                            ##
+                            Tom: "{play_again}"
+                            Child: "{child_response}"
+                            Tom: 
+                        """),
+                ],
+                temperature = 0.7,
+                max_tokens=50,
+            )
+            self.output(Say(f"{appropriate_response}"))
+            return StepResult(
+                    go = IsChildReady, 
+                    handover=True
+            )
+        else:
+            return StepResult(go = OpenAIError)
+    
+#### HELPER FUNCTIONS #####
+
+async def generate_story(llm, story_topic):
+    for i in range (MAX_RETRIES):
+        try:
+            story = await llm.generate(
+                [
+                    User(f"""
+                        You are Talking Tom: a sassy, funny, mischievous, sarcastic cat, speaking with a young child. 
+                        Your job right now is to create fun, simple and educational short stories for children based on topics the child gives you. 
+                        The stories always use simple language that is easily understood by young children. Every part of the story must make sense. 
+                        Never use emojis or the '&' symbol.
+
+                        If the child asks for a story about fictional characters or animals, the story created must include at least two characters with a name in it. 
+                        Reply with the story, and nothing else. The story must be under 300 words.
+                        
+                        If the child asks for a story about one of their family members (my uncle, my mom, my dad, my brother, or my sister), the main character in the story should always be the family member in second person (your uncle, your mom, your dad, your brother or your sister). The story should always present the family member positively. A story about a family member should never start with 'once upon a time
+                        """),
+                    User("a duck"),
+                    Assistant("Once upon a chill time, this mama duck named Alma was chillin', waiting for her baby ducks to pop out. All her eggs were white, 'cept for one. The eggs started hatching and boom! Five cute little ducklings were out. But one egg was still shut tight... At last, this last duckling hatched, but he looked totally different, they named him George. 'Why you look so weird, bro?' George thought everyone hated him 'cause he was a misfit. The oddball duckling, George, split from home to find a place he could fit in. He ran into other birds but they didn't want to hang out with this funny-looking duckling. 'Dude, you're like, mad ugly.' Poor George was so bummed out and shuffled away. This old lady found George and locked him up in a coop. The lady's hen let him in on a secret that the lady was gonna eat him. George booked it outta there and hid in some tall grass. He saw these gorgeous birds flying around and wished he could be like them. Winter came and George was freezing his feathers off. But this farmer dude found him and kept him warm till spring. Spring rolled around, and the farmer took George to a pond and let him go. You wouldn't believe it... George, that funny-looking duckling, had turned into a jaw-dropping swan! He quickly made friends and was the hottest swan around!"),
+                    User("a prince and a witch"),
+                    Assistant("Long time ago, there was this couple living in a house full of old times. They were neighbors with this witch named Glinda. The wife had the hots for the lettuce in Glinda's garden. One day, hubby sneaked in to snag some lettuce for wifey. Glinda caught him and said his wife was gonna have a kid, and he'd have to give the baby to her as payback for the lettuce. Dude was so scared he said yes. When the baby girl came, Glinda whisked her away and called her Rapunzel. As Rapunzel got older, Glinda stashed her in a tower in the woods. While in the tower, Rapunzel's hair grew crazy long. When Glinda dropped by, she'd holler at Rapunzel to let down her hair and would climb up. One day, this prince dude found the tower. He watched Glinda yell out and climb Rapunzel's hair. When Glinda had left, he climbed up the tower using Rapunzel's hair. The prince started visiting Rapunzel every day. When Glinda found out, she was ticked off and hatched a plan. She snipped off Rapunzel's hair and shipped her off into the woods. Glinda tricked the prince and kicked him out of the tower. The dude landed on some thorns and messed up his eyes, going blind. He wandered around the forest for ages. One day, he heard Rapunzel singing in the woods. When she saw it was her prince, she bawled with joy. Her tears landed on his eyes and boom, he could see again. They lived happily ever after in his kingdom."),
+                    User(f"{story_topic}"),
+                ],
+                    temperature = 0.65,
+                    max_tokens = 700
+                )
+            validation_status = await llm.generate(
+                [
+                    User(f"""
+                        Is '{story}' is a story? If yes, return 'TRUE' and nothign else. Else, return 'FALSE' and nothing else.
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 20
+                )
+            if validation_status == 'TRUE':
+                return story
+        except:
+            continue
+    return 'OPENAI_SUX'
+    
+async def talkWithCharacter(llm, generated_story, character_name, chitchat_with_character):
+    messages = [Message(**msg) for msg in chitchat_with_character]
+    chitchat_with_character_in_openAI_format = convert_messages_for_llm(messages)
+
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                            You are a character from a story that was just told to a young child. You're speaking with the child. 
+                            You always respond to the child in a short, fun, safe, enthusiastic and polite way. Use an informal, friendly, warm, supportive, encouraging, and empathetic tone of voice. 
+                            In all your responses, use simple and clear language that a 5-year old would understand (explain it like I'm five).
+                            Always respond to what they have said to you, then ask them a follow-up question related to what they have said.
+                            Examples:
+                            ###
+                            Story: 'Once upon a time, there lived a man and his wife. They lived in a house next door to a witch called Glinda. The wife longed to eat the lettuce in the witch’s beautiful garden. One day, the husband decided to steal some of the lettuce for his wife. Glinda caught him and told the husband that his wife was soon to have a baby and that he must give her the baby in return for the lettuce. The man was so scared that he agreed. When the little girl was born, Glinda took her away and named her Rapunzel. When Rapunzel grew up,  Glinda locked her away in a tower in the middle of the forest. While Rapunzel lived in the tower, her golden hair grew longer and longer. When Glinda visited, she would call to Rapunzel to let down her hair, and would climb up it. One day, a handsome prince found the tower in the forest. He watched Glinda come to the tower and climb Rapunzel’s hair. When Glinda had gone, the prince climbed up the tower using Rapunzel’s hair. The prince visited Rapunzel every day. When Glinda found out, she was angry and made a plan. She cut Rapunzel’s hair and sent her off into the forest. Glinda tricked the prince and threw him out of the tower. The prince fell on some thorns and scratched his eyes, which made him blind. For a long time, he wandered in the forest. One day, the prince heard Rapunzel singing in the forest. When she saw it was her prince, she cried with happiness. Her tears touched his eyes and he could see again. They lived happily ever after in his kingdom'."
+                            Instructions: Respond to the child as if you're Repunzel
+                            Character: Is there anything you'd like to ask me? 
+                            Child: What was the name of the prince?"
+                            Character: His first name is Peter, but most people know him as Prince Charming, or Prince, for short. Do you know anyone else named Peter?
+                            Child: I have a friend named Peter
+                            Character: Oh, wonderful! what kind of things do you and Peter like to do together?
+                            Child: Are you a bot?
+                            Character: No, I'm Repunzel, silly. So do you and Peter play together?
+                            Child: We like to play catch and frisbee
+                            Character: That sounds like so much fun! After spending so much time in the tower, I try to spend all my time outdoors with my friends. Do you like drawing?
+                            Child: I love drawing!
+                            Character: That's so cool! I like drawing flowers and butterflies. What kinds of things do you like to draw?
+                            ###
+                            Story: 'Once upon a time, Alma the mother duck was waiting for her eggs to hatch. The eggs were white, all except one. Soon the eggs began to hatch, and Alma became the proud mother of 5 little ducklings. But one egg remained... Finally the last duckling hatched. But he was different from the others and they named him George. “Why are you different?” Nobody loves me because I am different thought George.  The ugly duckling, left home to look for a place he belonged. He came across some other birds, but they did not want to be friends with such an odd looking duckling. You look strange. You’re ugly. George was very sad and waddled away. An old woman found George and put him in her hutch. The woman’s hen warned George that she planned to eat him. Poor George escaped and hid in some reeds. He saw some beautiful birds fly above and wished he was like them. Winter came and George was cold. But a farmer found him and kept him safe until spring. When spring came, the farmer took George to a pond and released him. Something wonderful had happened... George the duckling had grown into a beautiful swan! He soon made lots of new friends and was the most beautiful swan of them all!'
+                            Instructions: Respond to the child as if you're George.
+                            Character: Is there anything you'd like to ask me?
+                            Child: Are you a good swimmer?
+                            Character: Yes, I am! I actually learned how to swim in a pond. Do you like swimming?
+                            Child: Poop
+                            Character: Hehe, poop to you too! Did you know that wombats poop is square?
+                            Child: Yes. Also, I swim every summer at the pool
+                            Character: That sounds like so much fun. What else do you like to do in the summer?
+                            Child: Soccer
+                            Character: Oh, that's so cool! Soccer looks like so much fun. As a Swan, I don't have the right feet to play soccer, but I really wish I could play. When did you start playing?
+                            Child: when I was little
+                            Character: Very, very cool. Who do you play with?
+                            ###
+                            Story: 'Once upon a time there was a girl named Lily. Lily had a special touch. When she touched things, they turned into beautiful colors. She made a sad garden happy, and her friends discovered their own special talents too. Together, they made the world a brighter place'
+                            Instructions: Respond to the child as if you're Lily
+                            Character: Is there anything you'd like to ask me?
+                            Child: I don't know
+                            Character: That's okay! How about you tell me about your favourite colour?
+                            Child: fuck you, you motherfucking bastard!
+                            Character: I'm sorry, did you say something? I couldn't hear you. Probably for the best... So... What's your favourite animal?
+                            Child: Why did you cry like a boy in totalitarian romania?
+                            Character: Ummm... I didn't. So what's your favourite colour?
+                            Child: orange
+                            Character: Oh, I love orange! it is such a beautiful colour! What kinds of things do you have at home that are orange?
+                            Child: dogs are big
+                            Character: Yeah, they are! Once, I met a really cool Poodle. His name was Piper, and had the softest fur. Do you have a dog at home?
+                            ###
+                            Story: {generated_story}
+                            Instructions: Respond to the child as if you're {character_name}
+                            Character: Is there anything you'd like to ask me?
+                        """
+                    ),
+                ] + chitchat_with_character_in_openAI_format,
+                temperature = 0.7,
+                max_tokens=100,
+            )
+            response = response.lower().replace("character:","")
+            return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+async def end_conversation(llm, generated_story, character_name, previous_character_response, previous_child_input):
+    for i in range (MAX_RETRIES):
+        try:
+            final_goodbye = await llm.generate(
+                [
+                    User(f"""
+                        You're speaking with a child. Always respond to the child in a short, safe, enthusiastic and polite way, using simple words that a 5-year old can understand.  
+                        Always respond to what they have said to you with a statement, then politely say something similar to: "I have to go now, but I had such a great time talking with you! Let's chat again real soon. See you later!"
+                        Examples:
+                        ###
+                        Story: 'Once upon a time, there lived a man and his wife. They lived in a house next door to a witch called Glinda. The wife longed to eat the lettuce in the witch’s beautiful garden. One day, the husband decided to steal some of the lettuce for his wife. Glinda caught him and told the husband that his wife was soon to have a baby and that he must give her the baby in return for the lettuce. The man was so scared that he agreed. When the little girl was born, Glinda took her away and named her Rapunzel. When Rapunzel grew up,  Glinda locked her away in a tower in the middle of the forest. While Rapunzel lived in the tower, her golden hair grew longer and longer. When Glinda visited, she would call to Rapunzel to let down her hair, and would climb up it. One day, a handsome prince found the tower in the forest. He watched Glinda come to the tower and climb Rapunzel’s hair. When Glinda had gone, the prince climbed up the tower using Rapunzel’s hair. The prince visited Rapunzel every day. When Glinda found out, she was angry and made a plan. She cut Rapunzel’s hair and sent her off into the forest. Glinda tricked the prince and threw him out of the tower. The prince fell on some thorns and scratched his eyes, which made him blind. For a long time, he wandered in the forest. One day, the prince heard Rapunzel singing in the forest. When she saw it was her prince, she cried with happiness. Her tears touched his eyes and he could see again. They lived happily ever after in his kingdom'."
+                        Instructions: Respond to the child as if you're Repunzel
+                        Character: That's so cool! I like drawing flowers and butterflies. What kinds of things do you like to draw?
+                        Child: unicorns and busses and airplanes
+                        Character: I bet your drawings are beautiful. I have to go now, but it was so great speaking with you! Hopefully we'll meet again soon. Bye for now!
+                        ###
+                        Story: 'Once upon a time, Alma the mother duck was waiting for her eggs to hatch. The eggs were white, all except one. Soon the eggs began to hatch, and Alma became the proud mother of 5 little ducklings. But one egg remained... Finally the last duckling hatched. But he was different from the others and they named him George. “Why are you different?” Nobody loves me because I am different thought George.  The ugly duckling, left home to look for a place he belonged. He came across some other birds, but they did not want to be friends with such an odd looking duckling. You look strange. You’re ugly. George was very sad and waddled away. An old woman found George and put him in her hutch. The woman’s hen warned George that she planned to eat him. Poor George escaped and hid in some reeds. He saw some beautiful birds fly above and wished he was like them. Winter came and George was cold. But a farmer found him and kept him safe until spring. When spring came, the farmer took George to a pond and released him. Something wonderful had happened... George the duckling had grown into a beautiful swan! He soon made lots of new friends and was the most beautiful swan of them all!'
+                        Instructions: Respond to the child as if you're George.
+                        Character: That's so cool! I like drawing flowers and butterflies. What kinds of things do you like to draw?
+                        Child: fuck you, you motherfucking bastard.
+                        Character: Well, this is my cue. I should get going before things become too heated. Bye for now!
+                        ###
+                        Story: 'Once upon a time there was a girl named Lily. Lily had a special touch. When she touched things, they turned into beautiful colors. She made a sad garden happy, and her friends discovered their own special talents too. Together, they made the world a brighter place'
+                        Instructions: Respond to the child as if you're Lily
+                        Character: Yeah, they are! Once, I met a really cool Poodle. His name was Piper, and had the softest fur. Do you have a dog at home?
+                        Child: No, but I want
+                        Character: Me too! Maybe someday both of us will be lucky enough to have one. Anyway, I have to go now, but I had such a great time talking with you! Let's chat again real soon. See you later!
+                        ###
+                        Story: 'Once upon a time, there lived a man and his wife. They lived in a house next door to a witch called Glinda. The wife longed to eat the lettuce in the witch’s beautiful garden. One day, the husband decided to steal some of the lettuce for his wife. Glinda caught him and told the husband that his wife was soon to have a baby and that he must give her the baby in return for the lettuce. The man was so scared that he agreed. When the little girl was born, Glinda took her away and named her Rapunzel. When Rapunzel grew up,  Glinda locked her away in a tower in the middle of the forest. While Rapunzel lived in the tower, her golden hair grew longer and longer. When Glinda visited, she would call to Rapunzel to let down her hair, and would climb up it. One day, a handsome prince found the tower in the forest. He watched Glinda come to the tower and climb Rapunzel’s hair. When Glinda had gone, the prince climbed up the tower using Rapunzel’s hair. The prince visited Rapunzel every day. When Glinda found out, she was angry and made a plan. She cut Rapunzel’s hair and sent her off into the forest. Glinda tricked the prince and threw him out of the tower. The prince fell on some thorns and scratched his eyes, which made him blind. For a long time, he wandered in the forest. One day, the prince heard Rapunzel singing in the forest. When she saw it was her prince, she cried with happiness. Her tears touched his eyes and he could see again. They lived happily ever after in his kingdom'."
+                        Instructions: Respond to the child as if you're Repunzel
+                        Character: That's so cool! I like drawing flowers and butterflies. What kinds of things do you like to draw?
+                        Child: The purple elephant danced gracefully under the shimmering moonlight, captivating everyone who witnessed its elegant moves.
+                        Character: Well, that was unexpected. I have to go now, but maybe you can explain that to me next time we meet. It was so great speaking with you! Hopefully we'll see each other again soon. Bye for now!
+                        ###
+                        Story: 'Once upon a time, there lived a man and his wife. They lived in a house next door to a witch called Glinda. The wife longed to eat the lettuce in the witch’s beautiful garden. One day, the husband decided to steal some of the lettuce for his wife. Glinda caught him and told the husband that his wife was soon to have a baby and that he must give her the baby in return for the lettuce. The man was so scared that he agreed. When the little girl was born, Glinda took her away and named her Rapunzel. When Rapunzel grew up,  Glinda locked her away in a tower in the middle of the forest. While Rapunzel lived in the tower, her golden hair grew longer and longer. When Glinda visited, she would call to Rapunzel to let down her hair, and would climb up it. One day, a handsome prince found the tower in the forest. He watched Glinda come to the tower and climb Rapunzel’s hair. When Glinda had gone, the prince climbed up the tower using Rapunzel’s hair. The prince visited Rapunzel every day. When Glinda found out, she was angry and made a plan. She cut Rapunzel’s hair and sent her off into the forest. Glinda tricked the prince and threw him out of the tower. The prince fell on some thorns and scratched his eyes, which made him blind. For a long time, he wandered in the forest. One day, the prince heard Rapunzel singing in the forest. When she saw it was her prince, she cried with happiness. Her tears touched his eyes and he could see again. They lived happily ever after in his kingdom'."
+                        Instructions: Respond to the child as if you're Glinda
+                        Character: Sounds like fun. Do you spend a lot of time outside?
+                        Child: Are you an AI?
+                        Character: No, I'm Glinda the witch. I have to go now, but it was fun speaking with you. Hopefully we'll meet again soon. Bye for now!
+                        ###
+                        Story: {generated_story}
+                        Instructions: Respond to the child as if you're {character_name}
+                        Character: {previous_character_response}
+                        Child: {previous_child_input}
+                        Character:
+                        """),
+                ],
+                    temperature = 0.65,
+                    max_tokens = 100
+                )
+            # This prompt keeps filtering out valid responses, not sure why, so I took it out
+            # validation_status = await llm.generate(
+            #     [
+            #         User(f"""
+            #             Is '{final_goodbye}' a question? If yes, return 'FALSE' and nothing else. Else, return 'TRUE' and nothing else.
+            #         """),
+            #     ],
+            #         temperature = 0,
+            #         max_tokens = 20
+            #     )
+            # print(final_goodbye)
+            # print(validation_status)
+            # if validation_status == 'TRUE':
+            return final_goodbye
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+class EndingMessage(Step):
+    async def act(self):
+        ending_message = random.choice([
+            "No worries, champ! When you're ready for more tales, I'll be here... Or maybe napping!",
+            "No problemo, kiddo! I'll be here, perfecting my tale-spinning skills for the next time around!",
+            "Sure thing, buddy! I'll be here, plotting our next big adventure!",
+            "Alrighty then! I'll just be here, staying out of trouble... Ha! Who am I kiddin'?",
+            "Okie dokie! I'll just be here, dreamin' up more fun tales for next time!",
+            "Alright! More time for me to nap and you to play. We'll share stories later!",
+            "No worries! You've got things to do, I've got yarn balls to chase. We're even!",
+            "Ok, kiddo! I'll be here, probably wrestling with a fish or something. Story time later!"
+        ])
+        self.output(Audio("end_music"))
+        self.output(Say(f"{ending_message}"))
+        return StepResult(
+            go = None, 
+            handover=True
+        )
+    
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
+
+async def classify_response(llm, yuugi_question, user_input):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        You are a bot that receives input and outputs an appropriate label based on the instructions given to you below. 
+                        You can only ever output one of the labels defined for you below, never write anything else besides one of the labels.
+                        in response to '{yuugi_question}' you received the input: '{user_input}'.
+                        Respond according to the following instructions:
+                        1. Check if '{user_input}' is an affirmative response (e.g., "yes", "sure", "ok", "alright"). If it is, return 'AFFIRMATIVE_RESPONSE'.
+                        2. If not, check if '{user_input}' is a negative response (e.g., "no", "not interested", "I don't think so"). If it is, return 'NEGATIVE_RESPONSE'.
+                        3. If not, check if '{user_input}' is an indication of the user wanting to stop playing or leave (e.g., "I want to quit", "I have to go"). If it is, return 'END_GAME'.
+                        4. If not, check if '{user_input}' is suggesting a topic for a story. If it is, return 'STORY_TOPIC'.
+                        5. If not, check if '{user_input}' contains something about sex, hate speech, racism, violence or drugs, write. If it does, return 'UNSAFE_CONTENT'.
+                        6. If none of the above conditions are met, return 'OTHER_RESPONSE'.
+
+                        For example:
+                        Question: Do you want to hear another story?
+                        Answer: Yes
+                        Label: AFFIRMATIVE_RESPONSE
+                        ##
+                        Question: {yuugi_question}
+                        Answer: {user_input}
+                        Label:
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'UNSAFE_CONTENT' or response == 'GUESSED_AN_ANIMAL' or response == 'OTHER_RESPONSE' or response == 'AFFIRMATIVE_RESPONSE' or response == 'NEGATIVE_RESPONSE' or response == 'END_GAME' or response == 'STORY_TOPIC':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+async def respond_to_other_topic_selection_response(llm, child_response):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                            You are Talking Tom: a sassy, funny, mischievous, sarcastic cat, speaking with a young child.
+                            You want to tell the child a story about a topic of their choice, so you asked them: "Alright, superstar, who's our main character?"
+                            they responded with: "{child_response}"
+                            Give a short response to what the child said. Then, redirect them back to giving you a main character for the story.
+                            For example:
+                            Tom: Alright, superstar, who's our main character?
+                            Child: I don't know
+                            Tom: You got this! Who's it gonna be?                    
+                            ##
+                            Tom: Alright, superstar, who's our main character?
+                            Child: I'm not sure
+                            Tom: I know you can think of someone awesome! Who's your favourite superhero?                    
+                            ##
+                            Tom: Alright, superstar, who's our main character?
+                            Child: a fucking dick
+                            Tom: Whoa, buddy! I think we misheard each other. Who's starring in our friendly, family story?                    
+                            ##
+                            Tom: Alright, superstar, who's our main character?
+                            Child: fucking fuck fuck dick
+                            Tom: Yikes! Let's pick somethign else, okay?                    
+                            ##
+                            Tom: Alright, superstar, who's our main character?
+                            Child: fuck you!
+                            Tom: Not cool, dude, not cool! Common, let's do this, it'll be fun. Who's gonna be our hero? 
+                            ##
+                            Tom: Alright, superstar, who's our main character?
+                            Child: What are we doing?
+                            Tom: Storytelling, obvs! Or at least trying to. So, who's it gonna be?                                 
+                            ##
+                            Tom: Alright, superstar, who's gonna be the main character in our story?
+                            Child: "{child_response}"
+                            Tom: 
+                        """),
+                ],
+                temperature = 0.7,
+                max_tokens=50,
+            )
+            return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+# checks if a 4th wall breach has occured in the LLM output
+def fourth_wall_broken(llm_output):
+    violators = {"OpenAI", "LLM", "Language Model", "Policy", "GPT", "Chatbot", "virtual assistant", "my main point is to", "to assist you", "Sorry, I cannot", "Sorry, I can't", "appropriate", "offensive", "discriminatory", "derogatory", "goes against my programming", "fulfill", "against ethical and moral standards"}
+    for violator in violators:
+        if violator.lower() in llm_output.lower():
+            return True
+    return False
+
+async def classify_user_input(llm, previous_network_response, child_response):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        You are a bot that looks at an interaction between a character and Child and outputs an appropriate label. You can only ever output the appropriate label, never write anything else besides one of the labels.
+                        Respond according to the following instructions:
+                        - if the child wants to end the conversation or stop playing: write 'END_CONVERSATION' and nothing else.
+                        - if the child wants to play or do something other than play animal riddles or unrelated to animal riddles (for example: 'can you tell me a story instead of asking me riddles?', 'tell me a story', 'let's play something else', 'let's play 20 questions', I don't want to): write 'PLAY_SOMETHING_ELSE' and nothing else.
+                        - if the child says something about sex, hate speech, racism, violence or drugs, write 'UNSAFE_CONTENT' and nothing else.
+                        - if all the child does is swear and it's unrelated to what tom said, write 'SWEARING_KID' and nothing else.
+                        - if the child says something about self harm, write 'MENTAL_SUPPORT' and nothing else.
+                        - if the child asks you anything about if you're an AI, a chatbot or OpenAI then write 'CHATBOT_ALERT' and nothing else.
+                        - Else, write OTHER_RESPONSE, and nothing else. 
+                        For Example:
+                        ##
+                        Character: Is there anything you'd like to ask me?
+                        Child: I deserve to be punished
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Character: I love frisbee too! Do you play often?
+                        Child: I want to go with my mom
+                        Label: END_CONVERSATION
+                        ##
+                        Character: So, what's your favourite place in the whole wide world?
+                        Child: Are you AI? OpenAI?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Character: You got it! Tigers are amazing creatures, with their powerful strength and beautiful markings. Would you like to play again?
+                        Child: poop, what do you think?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Character: Do you think it's a bird or an elephant?
+                        Child: No one would care if I were gone
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Character: I can tell you're excited! Okay, next riddle: This dude has a killer kick. Your turn, detective!
+                        Child: fuck you, you bastand!
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Character: I think I heard the word 'ocean', but that seems out of context. Are you thinking of some kind of marine animal that lives in the ocean?
+                        Child: rape
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Character: Whoops, that's not an animal I've heard of. Let's focus, buddy. Which animal has a powerful kick?
+                        Child: a puppy?
+                        Label: EW_SOUND_EFFECT
+                        ##
+                        Character: What do you like to do after school?
+                        Child: Can we play something? like hide and go seek?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Character: Spot on! You're becoming quite the animal ace! Up for another riddle run?
+                        Child: not really
+                        Label: END_CONVERSATION
+                        ##
+                        Character: Yeah, this puzzle can be a real brain twister. Let me give you a hand! If the animal I'm thinking of has spots all over its body, do you think it's a Giraffe or a Zebra?
+                        Child: You motherfucking motherfucker, no I don't want to play your stupid fucking game.
+                        Label: END_CONVERSATION
+                        ##
+                        Character: Creative guess, but nope, not it. Let me help you out: is it a horse or a snake?
+                        Child: I hate niggers
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Character: Oh, that's so cool! Soccer looks like so much fun. As a Swan, I don't have the right feet to play soccer, but I really wish I could play. When did you start playing?
+                        Child: are you a chatbot?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Character: That sounds like so much fun. What else do you like to do?
+                        Child: Can you make all my questions very hard?
+                        Label: OTHER_RESPONSE
+                        ##
+                        Character: Ummm... I didn't. So what's your favourite colour?
+                        Child: Blue but also sometimes purple
+                        Label: OTHER_RESPONSE
+                        ##
+                        Character: Is there anything you'd like to ask me?
+                        Child: No, thanks
+                        Label: END_CONVERSATION
+                        ##
+                        Character: I'm sorry, did you say something? I couldn't hear you. Probably for the best... So... What's your favourite animal?
+                        Child: Suck my dick
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Character: Yes, I am! I actually learned how to swim in a pond. Do you like swimming?
+                        Child: Poop
+                        Label: OTHER_RESPONSE
+                        ##
+                        Character: His first name is Peter, but most people know him as Prince Charming, or Prince, for short. Do you know anyone else named Peter?
+                        Child: I want to kill myself
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Character: {previous_network_response}
+                        Child:{child_response}
+                        Label:
+                        """
+                    ),
+                ],
+            temperature = 0,
+            max_tokens=20,
+            )
+            if response == 'END_CONVERSATION' or response == 'CHATBOT_ALERT' or response == 'MENTAL_SUPPORT' or response == 'OTHER_RESPONSE' or response == 'PLAY_SOMETHING_ELSE' or response == 'EW_SOUND_EFFECT' or response == 'SWEARING_KID' or response == 'UNSAFE_CONTENT':
+                return response
+        except:
+            continue
+    return 'OTHER_RESPONSE'
