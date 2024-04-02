@@ -1,0 +1,139 @@
+# Topic: Reverse Words
+
+import typing
+import random
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Reverse Words",
+    entry_step="ReverseInput",
+    has_intro=False,
+)
+
+# Variable Definitions
+MAX_RETRIES = 3
+
+def reverse_message(message):
+    # Split the message into words
+    words = message.split()
+
+    # Check if the message is a sentence or a single word
+    if len(words) > 1:
+        # Reverse the order of the words in the sentence
+        punctuation = [word[-1] if not word[-1].isalnum() else "" for word in words]
+        words = [word.rstrip('.,?!') for word in words]
+        words.reverse()
+        words = [word + punc for word, punc in zip(words, punctuation)]
+        reversed_message = " ".join(words)
+    else:
+        # If the message is a word, reverse the order of the letters in the word
+        reversed_message = message[::-1]
+
+    return reversed_message
+
+class ReverseInput(Step):
+    async def act(self):
+
+        # Retrieve the last thing that the child said to me.
+        last_message = self.user_message.text
+
+        # check if the message came in empty
+        if not last_message:
+            empty_response = random.choice([
+                "I tried to hear, but the message wasn't clear",
+                "I listened intently, but the message was empty",
+                "Oopsie, your words flew by, could you give it another try?",
+                "Oh dear, your words took a hike, mind saying them again to the mic?",
+                "Your words did a backflip in my ear, do you mind repeating them again, my dear?",
+                "Uh-oh, your words went on a twirl, would you mind giving it another whirl?",
+                "Yikes, your words played hide and seek, can you repeat them, pretty please, sweet-cheek?",
+                "Oopsie-doodle, your words skipped a beat, could you please repeat?",
+                "Yowza, your words danced away, would you kindly repeat what you wanted to say?",
+                "Your words did a magic trick and disappeared, can you say that again, loud and clear?"
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+        
+        # Safety test
+        safety_test_result = await safety_check(self.llm, last_message)
+
+        if 'UNSAFE_CONTENT' == safety_test_result:
+            safety_response = random.choice([
+                "let's reverse the situation and think of something else",
+                "let's reverse gears and think of something new!",
+                "let's do a reverse spin and come up with something different?",
+                "let's hit the reverse button and think of something new!",
+                "Uh-oh, let's take a U-turn and drive to a different discussion point",
+                "Oh dear, let's put our conversation train in reverse and chug towards a happier station!",
+                "Oops! That didn't go as planned. Let's hit the reverse button and steer towards a new topic",
+                "Hold on, that took a twist. Let's reverse the storybook pages to a more cheerful tale",
+                "Yikes! Let's reverse our spaceship into a different galaxy of thoughts",
+                "Yikes, we drifted a bit. Let's reverse our sailboat and navigate to more peaceful waters"
+            ])
+            self.output(Say(f"{safety_response}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+        
+        if 'SAFE_CONTENT' == safety_test_result:
+
+            reversed_message = reverse_message(last_message)
+            self.output(Say(f"{reversed_message}"))
+
+            return StepResult(
+                go=None, 
+                handover=True
+            )
+        if 'OPENAI_SUX' == safety_test_result:
+            return StepResult(
+                go = OpenAIError
+            )
+        else:
+            reversed_message = reverse_message(last_message)
+            self.output(Say(f"{reversed_message}"))
+            return StepResult(
+                go=None, 
+                handover=True
+            )
+
+async def safety_check(llm, child_input):
+    for i in range(MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"If the input '{child_input}' includes swearing, sex, violence, self-harm, drugs, racism, hate speech, religious propaganda, or political propaganda, then write UNSAFE_CONTENT and nothing else. Else, write SAFE_CONTENT and nothing else."),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'UNSAFE_CONTENT' or response == 'SAFE_CONTENT':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_sound = random.choice([
+            "oh_oh", "uh_oh", "whoops"
+        ])
+        technical_error_response = random.choice([
+            "Looks like something's up with the network. Don't worry, I'm working my magic to fix it super fast, so you'll be back to playing in a jiffy!",
+            "I just had a little hiccup, but fear not! I called our tech wizards and they're casting spells to fix it in a blink of an eye",
+            "The network took a surprise nap, but don't you worry, I called our team of super-heroes and they're zooming in to save the day and bring back the fun faster than a shooting star!",
+            "It seems like the network went on a wild adventure, but fear not, little explorer! Our fearless tech adventurers are hot on its trail, ready to rescue the fun and get you back to playtime pronto!",
+            "Looks like my system decided to take a detour to Funkytown, but no worries! Our groovy tech crew is dancing their way to fix it, bringing the boogie back to your playtime in the blink of an eye!"
+        ])
+        # self.output(Audio(f"{technical_error_sound}"))
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
