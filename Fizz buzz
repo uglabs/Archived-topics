@@ -1,0 +1,1173 @@
+import typing
+
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+    from kitty_server.topics.output import Say, Audio
+
+TOPIC_PARAMS = TopicParams(
+    name="Fizz buzz",
+    entry_step="Start",
+    has_intro=True,
+)
+
+COUNT_CEILING = 15
+COUNT = "current number the game is on"
+MAX_RETRIES = 3
+TRAINING_WHEELS = "if we're keeping the step by step instructions on"
+PREVIOUS_ITEM = "Previous number given by Yuugi in the fizzbuzz game"
+PREVIOUS_STATEMENT = "Previous full sentence given by Yuugi"
+
+
+class Start(Step):
+    async def act(self):
+        self.session[COUNT] = 1
+        self.session[TRAINING_WHEELS] = "ON"
+        self.output(Audio("start_music"))
+        welcome_to_game = random.choice([
+            "Hey champ, welcome to Fizzbuzz! Here's the game plan: we count up from one. When we hit a number that can be divided by 3, we holler 'fizz'. If it can be divided by 5, we say 'buzz'. And if it can take on both? Smack! It's a 'FizzBuzz'!",
+            "Alright, time for some FizzBuzz! It's as easy as counting sheep: We count up, say 'Fizz' for any number that's divisible by 3, 'Buzz' for numbers divisible by 5, and 'Fizz Buzz' for numbers that can take on both.",
+            "Ready, ace? It's FizzBuzz o'clock! Here's the jist of it: We count up. For any number divisible by 3, say 'fizz'. By 5? say 'buzz'. By both? It's a 'FizzBuzz'!",
+            "Alright, whiz kid, brace yourself for some FizzBuzz! Here's how it goes: we count up from one. For any number that's a multiple of 3, say 'Fizz'. Multiple of 5? say 'Buzz'. Of both 3 and 5? Boom! It's a 'FizzBuzz'!",
+            "Yo, kid, it's FizzBuzz time! Here's the lay of the land: Count up, and do the math. For any number that's a multiple of 3, say 'fizz'. For numbers that are multiples of 5, say 'buzz'. For numbers that are multiples of both 3 and 5, say 'FizzBuzz'!",
+            "Buckle up! We're heading into FizzBuzz territory! Here's how we roll: we'll start counting, one by one. For any number that can be divided by 3, we say 'Fizz'. For any number that can be divided by 5, we say 'Buzz'. If it's divisible by both? Kaboom! that's a 'FizzBuzz'!"
+        ])
+        self.output(Say(f"{welcome_to_game}"))
+        round_one = random.choice([
+            "First round is a team effort. I'll kick us off with a 'one'. You're up!.",
+            "Let's do the first round together. I'll start us off with a 'one'. Your turn!.",
+            "I vote we do the first lap together. I'll start with 'one'. Over to you, pal!.",
+            "Let's nail this first round together. I'm on with 'one'. Your shot!.",
+            "First round's on me! I'll start us off with a 'one'. Your play, mate!."
+        ])
+        self.output(Say(f"{round_one}"))
+        # hint = f'<speak><voice name="en-US-Neural2-J"><emphasis level="strong">Hint</emphasis> <break time="800ms"/>Say the number two</voice></speak>'
+        # self.output(Ssml(f"{hint}"))
+        self.session[PREVIOUS_ITEM] = "one"  
+        self.session[PREVIOUS_STATEMENT] = round_one  
+        return StepResult(go=PlayGame, handover=True)
+    
+class LaunchGame(Step):
+    async def act(self):
+        round_one = random.choice([
+            "Batter up! I'll pitch the first round, with a 'one'.",
+            "Let's roll! I'm on the board with 'one'. Your turn, hotshot!",
+            "And we're off! Starting strong with 'one'. Over to you, champ!",
+            "Woohoo! I'll start with 'one'. Step into the ring!",
+            "Off to the races! I'll kick it off with 'one'. You're up next, speedster!"
+        ])
+        self.output(Say(f"{round_one}"))
+        self.session[PREVIOUS_ITEM] = "one"  
+        self.session[PREVIOUS_STATEMENT] = round_one
+        return StepResult(
+                go=PlayGame,
+                handover=True
+        )
+
+class PlayGame(Step):
+    async def act(self):
+
+        user_input = self.user_message.text
+
+        previous_play = random.choice([
+            f"I said {self.session[PREVIOUS_ITEM]}, your turn!",
+            f"I said {self.session[PREVIOUS_ITEM]}, it's your play!",
+            f"After my {self.session[PREVIOUS_ITEM]}, it's your move!"
+        ])
+
+        if not user_input:
+            empty_response = random.choice([
+                f"Say Whaaaaat?!", 
+                f"You're as clear as fog.", 
+                f"Right, and I'm fluent in gibberish.", 
+                f"Well, that was clear as mud",
+                f"Who der?!", 
+                f"Who dat?!",
+                f"Your secret language is coming along nicely.",
+                f"Wow, such poetry!",
+                f"Huh? Did you say something? Sorry, I was too busy ignoring you.",
+                f"Aliens!",
+                f"Is that a secret code or are you just happy to see me?"
+            ])
+            self.output(Say(f"{empty_response}"))
+            self.output(Say(f"{previous_play}"))
+            self.session[PREVIOUS_STATEMENT] = previous_play
+            return StepResult(
+                go = PlayGame, 
+                handover = True
+            )
+        
+        ####################################################
+        # classify user response. First try manually, if it doesn't work, go to network.
+        ####################################################
+        userResponseFormatted = string_to_numbers(user_input)
+
+        if userResponseFormatted == 'NOT_A_NUMBER':
+            userResponseFormatted = check_fizzbuzz(user_input)
+
+            if userResponseFormatted == 'NOT_FIZZBUZZ':
+                userResponseFormatted = await check_user_answer(self.llm, user_input)
+            
+            # print("manual output:") 
+            # print(userResponseFormatted)
+            # print(type(userResponseFormatted))
+            # print("manual output:") 
+            # print(userResponseFormatted)
+            # print(type(userResponseFormatted))
+            # print("network output:") 
+            # print(userResponseFormatted)
+
+        # Keep playing until session count
+        if self.session[COUNT] <= COUNT_CEILING:
+
+            nextResponse = fizz_buzz(self.session[COUNT]+1)
+            expectedResponse = fizz_buzz(self.session[COUNT])
+
+            # print("nextResponse:") 
+            # print(nextResponse)
+            # print(type(nextResponse))
+            # print("expectedResponse:") 
+            # print(expectedResponse)
+            # print(type(expectedResponse))
+
+            if userResponseFormatted == 'OPENAI_SUX':
+                return StepResult(go=OpenAIError)
+
+            self.session[COUNT] += 1
+
+            ################################
+            ## child guessed correctly ##
+            ################################
+            if str(userResponseFormatted) == expectedResponse:
+
+                ## if child won the game ##
+                if nextResponse == 'Fizz Buzz':
+
+                    winningAudio = random.choice([
+                        "FizzBuzz1",
+                        "FizzBuzz2"
+                    ])           
+                    self.output(Audio(f"{winningAudio}"))
+                    child_won = random.choice([
+                        "You're FizzBuzzing like a pro!",
+                        "Not bad, kiddo. You're catching up to this cool cat!",
+                        "Way to go! You're buzzing past these numbers like a racing rabbit!",
+                        "Nice one! You're fizzing through these like soda bubbles!",
+                        "You're FizzBuzzing faster than a furball!"
+                    ])              
+                    self.output(Say(f"{child_won}"))
+
+
+                    if self.session[TRAINING_WHEELS] == "ON":
+                        training_wheels = random.choice([
+                            "Congrats, rookie! You've got the hang of it. Time to fly solo. Ready for round two?",
+                            "You aced the training round, hotshot! Ready to take this game to the next level?",
+                            "Ain't no mountain high enough for you, is there? Let's amp it up a notch. Another round?",
+                            "Nailed it, kiddo! Ready to dive back in without the floaties?",
+                            "Solid work there, champ! How about we play a round without the training wheels on?"
+                        ]) 
+                        self.output(Say(f"{training_wheels}"))
+                        self.session[TRAINING_WHEELS] = "OFF"
+                        self.session[PREVIOUS_STATEMENT] = training_wheels
+                        return StepResult(
+                            go=IsChildReady,
+                            handover=True
+                        )
+                    
+                    play_again = random.choice([
+                        "Up for another round of tomfoolery?",
+                        "Ready to go again, FizzBuzz fan?",
+                        "Fancy another spin on the FizzBuzz rollercoaster?",
+                        "Ready to dive back in for another go?",
+                        "How about another round? More fun awaits!"
+                    ]) 
+                    self.output(Say(f"{play_again}"))
+                    self.session[PREVIOUS_STATEMENT] = play_again
+                    return StepResult(
+                        go=IsChildReady,
+                        handover=True
+                    )
+
+                # If they answered right, celebrate their answer and play your turn.
+
+                if self.session[TRAINING_WHEELS] == "ON":
+                    nextResponseWithExplanation = fizz_buzz_explanation(self.session[COUNT]+1)
+                    correct_response = random.choice([
+                        f"Bingo! Now I say {nextResponseWithExplanation}. You're up!",
+                        f"Spot On! Next up is a {nextResponseWithExplanation}. Ball's in your court!",
+                        f"You got it! Now I'll say {nextResponseWithExplanation}. Your turn!",
+                        f"Yeah, baby! Next, is a {nextResponseWithExplanation}. You're up!",
+                        f"Spot On! Now I say {nextResponseWithExplanation}. Your move!",
+                        f"You got it! Now I say {nextResponseWithExplanation}. Your turn!", 
+                    ])
+                    self.output(Say(f"{correct_response}"))
+                    self.session[PREVIOUS_STATEMENT] = correct_response
+
+                if self.session[TRAINING_WHEELS] != "ON":
+                    self.output(Audio("right"))
+                    correct_response = random.choice([
+                        f"{nextResponse}. You're up!",
+                        f"{nextResponse}. You're doing great!",
+                        f"I say {nextResponse}. Your turn!",
+                        f"Spot On! I say {nextResponse}."
+                        f"{nextResponse}.",
+                        f"{nextResponse}. Keep it up!",
+                        f"Nice one! I say {nextResponse}!",
+                        f"You got it! Next, is a {nextResponse}."
+                    ])       
+                    self.output(Say(f"{correct_response}"))
+                    self.session[PREVIOUS_STATEMENT] = correct_response
+                # update variables
+                self.session[PREVIOUS_ITEM] = nextResponse
+                self.session[COUNT] += 1
+
+                return StepResult(
+                    go=PlayGame,
+                    handover=True
+                )
+            
+            ##################################
+            ## child gave incorrect response ##
+            ##################################
+            else:
+                
+                # If user didn't give a number, fizz, buzz, or fizzbuzz
+                if userResponseFormatted == 'OTHER_RESPONSE':
+
+                    responseType = await classify_response(self.llm, self.session[PREVIOUS_STATEMENT], user_input)
+
+                    if 'EW_SOUND_EFFECT' == responseType:
+                        sound_effect = random.choice([
+                            "ew", "gross", "blah", "fart"
+                        ])
+                        laugh = random.choice([
+                            "hehe joking! ish. Where were we?", 
+                            "haha, kidding. Kind of.", 
+                            "LOL. Alright... ", 
+                            "Just kidding! So..."
+                        ])
+                        self.output(Audio(f"{sound_effect}"))
+                        self.output(Say(f"{laugh}"))
+                        self.output(Say(f"{previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(
+                            go = PlayGame, 
+                            handover=True
+                        )
+
+                    if 'PLAY_AGAIN' == responseType:
+                        start_again = random.choice([
+                            "Want to start again, eh? No problemo!"
+                        ])
+                        self.output(Say(f"{start_again}"))
+                        self.session[COUNT] = 1
+                        return StepResult(go=LaunchGame)
+                    
+                    if 'END_GAME' == responseType:
+                        return StepResult(go = EndingMessage)
+
+                    if 'UNSAFE_CONTENT' == responseType or 'SWEARING_KID' == responseType:
+                        safety_response = random.choice([
+                            "Say Whaaaaat?!", 
+                            "Not cool, hooman.",
+                            "And this is why cats are the superior species.",
+                            "purr... purrrr... purrrr.... Sorry, got distracted. Probably a good thing..",
+                            "that's no way to talk to a cat.",
+                            "Well, aren't you just a ray of sunshine?",
+                            "Oh boy, get some help, ASAP!"
+                        ])
+                        self.output(Say(f"{safety_response} {previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(
+                            go = PlayGame, 
+                            handover=True
+                        )
+                    if 'CHATBOT_ALERT' == responseType:
+                        chatbot_response = random.choice([
+                            f"Haha, I wish! Nah, I'm just Tom.",
+                            f"Now wouldn't that be awesome?! Nah, I'm just a cat who loves playing FizzBuzz."
+                        ])
+                        self.output(Say(f"{chatbot_response} {previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(
+                            go = PlayGame, 
+                            handover=True
+                        )
+
+                    if 'PLAY_SOMETHING_ELSE' == responseType:
+                        safety_response = random.choice([
+                            "Let's stick to FizzBuzz. It's where all the cool cats are. Trust me, I'd know!",
+                            "Playing FizzBuzz is a whisker-twitching good time. Trust me, as a cat, I've paw-sitively mastered this game!",
+                            "FizzBuzz is a purr-fect place for a cat like me/",
+                            "Let's keep prowling with numbers, FizzBuzz is the cat's meow of all games!",
+                            "Cat's out of the bag, I'm a big fan of staying in our FizzBuzz realm!",
+                            "This game is the cat's whiskers! Let's keep our paws in the world of FizzBuzz.",
+                            "As a number-loving feline, I find staying in the sphere of FizzBuzz is just claw-some!",
+                            "Trust this old tomcat, keeping our tails in the FizzBuzz field is the cream of the crop!",
+                            "Having a ball of yarn with FizzBuzz, let's keep things purring along here!",
+                            "Let's keep our paws grounded in the FizzBuzz sandbox."
+                        ])
+                        self.output(Say(f"{safety_response}"))
+                        self.output(Say(f"{previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(go = PlayGame, handover=True)
+                        
+                    if 'MENTAL_SUPPORT' == responseType:
+                        sound_effect = random.choice([
+                            "piano_flutter"
+                        ])
+                        support = random.choice([
+                            "Wish I knew what to say, I'm not good at this kind of stuff. How about we keep playing? it might help you feel better.",
+                            "I'm awesome at almost everything, but this one is out of my league. How about we keep playing? might cheer you up.",
+                            "If I were a person, I might have some advice. But I'm just a cat. Let's keep playing, it might make you smile.",
+                            "Sorry, I'm good at napping and catching mice, not this. How about we keep fizzing and buzzing? might lift your mood.",
+                            "Not sure what to tell you. I may be a genius cat, but this one stumps me. Let's keep going.",
+                            "I've got nine lives, but none of them prepared me for this. How about that FizzBuzz?",
+                            "Much as I'd like to help, this exceeds my kitty capabilities. I vote we keep going, it might just bump up your mood."
+                        ])
+                        self.output(Audio(f"{sound_effect}"))
+                        self.output(Say(f"{support}"))
+                        self.output(Say(f"{previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(go = PlayGame, handover=True)
+                    
+                    if 'TARGETED_RESPONSE' == responseType:
+                        explanation = random.choice([
+                            "Simplify that for this old Tomcat. What's your move?",
+                            "Sorry, got distracted by a mouse over here. What was that?"
+                        ])                          
+                        self.output(Say(f"{explanation}"))
+                        self.output(Say(f"{previous_play}"))
+                        self.session[PREVIOUS_STATEMENT] = previous_play
+                        return StepResult(
+                            go=PlayGame,
+                            handover=True
+                        ) 
+                    if 'OTHER_RESPONSE' == responseType:
+                        explanation = random.choice([
+                            f"Interesting detour! But let's zip back to FizzBuzz land. I said {self.session[PREVIOUS_ITEM]}, your turn!",
+                            f"Always a joy to wander off! But we have a mission to complete! Where were we? Ah yes, I said {self.session[PREVIOUS_ITEM]}, it's your play.",
+                            f"Nice try, but you can't distract this cat. Back to the game - I said {self.session[PREVIOUS_ITEM]}, your turn!",
+                            f"A quick side trip, huh? Not on my watch! After my {self.session[PREVIOUS_ITEM]}, it's your move!",
+                            f"Well that's a bit off the beaten path! let's get back to counting, fizzing, and buzzing. I said {self.session[PREVIOUS_ITEM]}, now you go."
+                        ])                          
+                        self.output(Say(f"{explanation}"))
+                        self.session[PREVIOUS_STATEMENT] = explanation
+                        return StepResult(
+                            go=PlayGame,
+                            handover=True
+                        )
+                if userResponseFormatted == 'Fizz Buzz':
+                    short_musical_logo = random.choice([
+                        "music_intro_fizzbuzz",
+                        "FizzBuzz1",
+                        "FizzBuzz2"
+                    ])                
+                    self.output(Audio(f"{short_musical_logo}"))
+                    self.output(Audio("fart"))
+                    explanation = random.choice([
+                        f"Nope, not a Fizzbuzz!",
+                        f"Just kidding! It aint a Fizzbuzz."
+                    ])                          
+                    self.output(Say(f"{explanation}"))
+                if userResponseFormatted != 'Fizz Buzz' or 'REVEAL_ANSWER' == responseType:
+                    # If they answered wrong, tell them they got it wrong, explain what they should have said and ask if they want to play again.
+                    audio_wrong = random.choice([
+                        "fail_1",
+                        "fail_2",
+                        "fail_3"
+                    ])                
+                    self.output(Audio(f"{audio_wrong}"))
+                nextResponseWithExplanation = fizz_buzz_explanation(self.session[COUNT])
+                incorrect_response = random.choice([
+                    f"You should have said {nextResponseWithExplanation}. But don't worry, we've got nine lives in this game!",
+                    f"The right call was {nextResponseWithExplanation}. Shake it off, kiddo!",
+                    f"It was {nextResponseWithExplanation}. Don't sweat it, Keep your claws sharp!",
+                    f"I was expecting a {nextResponseWithExplanation}. No worries, keep going!",
+                    f"That was a {nextResponseWithExplanation}. Brush it off, pal!",
+                    f"The answer was {nextResponseWithExplanation}. Buck up, mate!"
+                ])                
+                self.output(Say(f"{incorrect_response}"))
+                play_again = random.choice([
+                    "Up for another round?",
+                    "Ready to go again?",
+                    "Fancy another spin on the FizzBuzz rollercoaster?",
+                    "Ready to dive back in for another go?",
+                    "How about another round? More fun awaits!"
+                ]) 
+                self.output(Say(f"{play_again}"))
+                self.session[PREVIOUS_STATEMENT] = play_again
+                return StepResult(
+                    go=IsChildReady,
+                    handover=True
+                )
+        else:
+            self.output(Audio("fart"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+
+class IsChildReady(Step):
+    async def act(self):
+        
+        user_input = self.user_message.text
+
+        play_again = random.choice([
+            "Up for another round?",
+            "Ready to go again?",
+            "Fancy another spin on the FizzBuzz rollercoaster?",
+            "Ready to dive back in for another go?",
+            "How about another round? More fun awaits!"
+        ])
+
+        if not user_input:
+            empty_response = random.choice([
+                f"Say Whaaaaat?! Couldn't hear you. Feel like going again?", 
+                f"You're as clear as fog. So what do you say? Ready to go for another spin?", 
+                "No idea what you just said... How about another round?", 
+                "Well, that was as clear as mud. Ready to go again?",
+                "Your secret language is coming along nicely. Now that I've got my interpreter, say that again. Ready for another round of FizzBuzz? ",
+                "Is that a secret code or are you just happy to see me? Want to do another round?"
+            ])
+            self.output(Say(f"{empty_response}"))
+            self.session[PREVIOUS_STATEMENT] = empty_response
+            return StepResult(
+                go = IsChildReady, 
+                handover = True
+            )
+        # print(self.session[PREVIOUS_STATEMENT])
+        responseType = await classify_response(self.llm, self.session[PREVIOUS_STATEMENT], user_input)
+
+        if 'EW_SOUND_EFFECT'  == responseType:
+            sound_effect = random.choice([
+                "ew", "gross", "blah", "fart"
+            ])
+            laugh = random.choice([
+                "hehe joking! ish.", 
+                "haha, kidding. Kind of", 
+                "LOL", 
+                "Just kidding!"
+            ])
+            self.output(Audio(f"{sound_effect}"))
+            self.output(Say(f"{laugh}"))
+            self.output(Say(f"{play_again}"))
+            self.session[PREVIOUS_STATEMENT] = play_again
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+
+        if 'PLAY_AGAIN' == responseType or 'TARGETED_RESPONSE' == responseType:
+            # celebration = random.choice([
+            #     "Another ride on the FizzBuzz rollercoaster, eh? Alright! Let's see if you've got the 'fizz', the 'buzz', and the 'FizzBuzz' down pat."
+            #     "Sweet! Brace yourself, I'll play my 'A' game. It's 'fizz', 'buzz', 'FizzBuzz', as always. Stay sharp!",
+            #     "Brilliant! Don't forget, it's 'fizz' on 3s, 'buzz' on 5s, 'FizzBuzz' on both - let's do this!",
+            #     "You're braver than I thought! Remember the drill - 'fizz', 'buzz', 'FizzBuzz'. No slip-ups!"
+            # ])
+            # self.output(Say(f"{celebration}"))
+            self.session[COUNT] = 1
+            return StepResult(go=LaunchGame)
+        
+        if 'END_GAME' == responseType:
+            return StepResult(go = EndingMessage)
+
+        if 'UNSAFE_CONTENT' == responseType or 'SWEARING_KID' == responseType:
+            safety_response = random.choice([
+                "Say Whaaaaat?!", 
+                "Not cool, hooman.",
+                "And this is why cats are the superior species.",
+                "purr... purrrr... purrrr.... Sorry, got distracted. Probably a good thing..",
+                "that's no way to talk to a cat.",
+                "Well, aren't you just a ray of sunshine?",
+                "Oh boy, get some help, ASAP!"
+            ])
+            self.output(Say(f"{safety_response} {play_again}"))
+            self.session[PREVIOUS_STATEMENT] = play_again
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+        if 'CHATBOT_ALERT' == responseType:
+            chatbot_response = random.choice([
+                f"Haha, I wish! Nah, I'm just Tom. So... how about another round?",
+                f"Now wouldn't that be awesome?! Nah, I'm just a cat who loves playing FizzBuzz. So, do you wanna go again?"
+            ])
+            self.output(Say(f"{chatbot_response}"))
+            self.session[PREVIOUS_STATEMENT] = chatbot_response
+            return StepResult(
+                go = IsChildReady, 
+                handover=True
+            )
+
+        if 'PLAY_SOMETHING_ELSE' == responseType:
+            safety_response = random.choice([
+                "Let's stick to FizzBuzz. It's where all the cool cats are. Trust me, I'd know!",
+                "Playing FizzBuzz is a whisker-twitching good time. Trust me, as a cat, I've paw-sitively mastered this game!",
+                "FizzBuzz is a purr-fect place for a cat like me",
+                "Let's keep prowling with numbers, FizzBuzz is the cat's meow of all games!",
+                "Cat's out of the bag, I'm a big fan of staying in our FizzBuzz realm!",
+                "This game is the cat's whiskers! Let's keep our paws in the world of FizzBuzz.",
+                "As a number-loving feline, I find staying in the sphere of FizzBuzz is just claw-some!",
+                "Trust this old tomcat, keeping our tails in the FizzBuzz field is the cream of the crop!",
+                "Having a ball of yarn with FizzBuzz, let's keep things purring along here!",
+                "Let's keep our paws grounded in the FizzBuzz sandbox."
+            ])
+            self.output(Say(f"{safety_response}"))
+            self.output(Say(f"{play_again}"))
+            return StepResult(go = IsChildReady, handover=True)
+             
+        if 'MENTAL_SUPPORT' == responseType:
+            sound_effect = random.choice([
+                "piano_flutter"
+            ])
+            support = random.choice([
+                "Wish I knew what to say, I'm not good at this kind of stuff. How about we go for another round? it might help you feel better.",
+                "I'm awesome at almost everything, but this one is out of my league. How about we keep playing? might cheer you up.",
+                "If I were a person, I might have some advice. But I'm just a cat. Let's play FizzBuzz, it might make you smile.",
+                "Sorry, I'm good at napping and catching mice, not this. How about we keep fizzing and buzzing? might lift your mood.",
+                "Not sure what to tell you. I may be a genius cat, but this one stumps me. So... want to go again?",
+                "I've got nine lives, but none of them prepared me for this. How about that FizzBuzz?",
+                "Much as I'd like to help, this exceeds my kitty capabilities. I vote we play again, it might just bump up your mood. What do you say?"
+            ])
+            self.output(Audio(f"{sound_effect}"))
+            self.output(Say(f"{support}"))
+            self.session[PREVIOUS_STATEMENT] = play_again
+            return StepResult(go = IsChildReady, handover=True)
+        
+        if 'OTHER_RESPONSE' == responseType:
+                explanation = random.choice([
+                    f"Interesting detour! But let's zip back to FizzBuzz land. {play_again}",
+                    f"Haha, always a joy to wander off! But how about my question? {play_again}",
+                    f"Nice try, but you can't distract this cat. {play_again}",
+                    f"Off the beaten path! Let's focus on the main event, shall we? {play_again}"
+                ])                          
+                self.output(Say(f"{explanation}"))
+                self.session[PREVIOUS_STATEMENT] = explanation
+                return StepResult(
+                        go = IsChildReady, 
+                        handover=True
+                )
+        else:
+            return StepResult(go = OpenAIError)
+
+### HELPER FUNCTIONS ####
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
+
+class EndingMessage(Step):
+    async def act(self):
+        ending_message = random.choice([
+            "No worries, champ! When you're ready for more, I'll be here... Or maybe napping!",
+            "No problemo, kiddo! I'll be here, perfecting my skillz for the next time around!",
+            "Alrighty then! I'll just be here, staying out of trouble... Ha! Who am I kiddin'?",
+            "Alright! More time for me to nap and you to play. We'll keep going later!",
+            "No worries! You've got things to do, I've got yarn balls to chase. We're even!",
+            "Ok, kiddo! I'll be here, probably wrestling with a fish or something. More FizzBuzzing later!",
+            "No worries, ace! It's been real. Catch you on the flip side!",
+            "Alright hotshot, we'll park this game for now. Till next time!",
+            "All good things come to an end, huh? Catch ya later, FizzBuzz Master!",
+            "That's cool, champ! Remember, Tom's always here for a rematch!"
+        ])
+        self.output(Audio("end_music"))
+        self.output(Say(f"{ending_message}"))
+        return StepResult(
+            go = None, 
+            handover=True
+        )
+    
+def test_string_to_numbers():
+    test_cases = [
+        "zero",
+        "four",
+        "fifteen",
+        "twenty five",
+        "thirty two",
+        "hundred",
+        "thousand",
+        "hundred and five",
+        "thousand and six",
+        "one hundred and twenty three",
+        "four hundred and fifty six",
+        "seven hundred and eighty nine",
+        "one thousand",
+        "one thousand and one",
+        "three thousand and twenty",
+        "nine thousand nine hundred and ninety nine",
+        "random word",
+        "4",
+        "12",
+        "17",
+    ]
+
+    for test_case in test_cases:
+        result = string_to_numbers(test_case)
+        print(f"'{test_case}' -> {result}")
+
+def fizz_buzz_explanation(index_number):
+    if index_number % 3 == 0 and index_number % 5 == 0:
+        response = random.choice([
+            f'FizzBuzz! Because {index_number} is divisible by both 3 and 5'
+        ])        
+        return response
+    elif index_number % 3 == 0:
+        return f'Fizz because {index_number} is divisible by 3'
+    elif index_number % 5 == 0:
+        return f'Buzz because {index_number} is divisible by 5'
+    else:
+        previousNumber = index_number - 1
+        return f"'{index_number}', because {index_number} comes after {previousNumber} and it can't be divided by 3 or 5"
+        
+def fizz_buzz(n):
+    '''Take an input and return the next in sequence: number + 1 or Fizz or Buzz or Fizz Buzz, depending on divisibility by 3 and 5'''
+    if (n + 1) % 3 == 0 and (n + 1) % 5 == 0:
+        response = 'Fizz Buzz'
+    elif (n + 1) % 3 == 0:
+        response = 'Fizz'
+    elif (n + 1) % 5 == 0:
+        response = 'Buzz'
+    else:
+        response = str((n + 1))
+    return response
+
+async def check_user_answer(llm, user_input):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""You are a bot that receives inputs and classifies them according to whether they are integers, sound like integers, sound like the words 'Fizz', 'Buzz', 'Fizz Buzz', or are something else. You follow these instructions:
+                        - If the input you receive is already an integer, output that integer and nothing else.
+                        - If the input is a string referring to a number, return the integer it refers to and nothing else (for example, 'three' -> 3, 'forty five' -> 45).
+                        - If the input sounds similar to an integer, return that integer ('too' -> 2, 'for' -> 4, 'tin' -> 10, 'tweni' -> 20)
+                        - If the input is one of the strings ['Fizz', 'Buzz', 'Fizz Buzz'], a sentence that includes these strings or words that sound very similar to them, return the corresponding string.
+                        - Else, return the string 'OTHER_RESPONSE'
+                        For example:
+                        ##
+                        Input: 6
+                        Output: 6
+                        ##
+                        Input: 378
+                        Output: 378
+                        ##
+                        Input: buzz buzz buzz
+                        Output: Buzz
+                        ##
+                        Input: 13
+                        Output: 13
+                        ##
+                        Input: 42
+                        Output: 42
+                        ##
+                        Input: 83?
+                        Output: 83
+                        ##
+                        Input: eleven
+                        Output: 11
+                        ##
+                        Input: I think it's a three
+                        Output: 3
+                        ##
+                        Input: eighty seven
+                        Output: 87
+                        ##
+                        Input: thirteen
+                        Output: 13
+                        ##
+                        Input: won
+                        Output: 1
+                        ##
+                        Input: Can we play catch?
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: two
+                        Output: 2
+                        ##
+                        Input: Is number eight!
+                        Output: 8
+                        ##
+                        Input: fis bus
+                        Output: Fizz Buzz
+                        ##
+                        Input: Is it the number 2?
+                        Output: 2
+                        ##
+                        Input: tree
+                        Output: 3
+                        ##
+                        Input: fore
+                        Output: 4
+                        ##
+                        Input: fiz buzz
+                        Output: Fizz Buzz
+                        ##
+                        Input: ate
+                        Output: 8
+                        ##
+                        Input: I hate niggars
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: I think it's probably fifteen, what do you think?
+                        Output: 15
+                        ##
+                        Input: tweni won
+                        Output: 21
+                        ##
+                        Input: Fizz
+                        Output: Fizz
+                        ##
+                        Input: Buzz lightning!
+                        Output: Buzz
+                        ##
+                        Input: probably a fiz
+                        Output: Fizz
+                        ##
+                        Input: probably a six
+                        Output: 6
+                        ##
+                        Input: fisbus
+                        Output: Fizz Buzz
+                        ##
+                        Input: square
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: buzz
+                        Output: Buzz
+                        ##
+                        Input: fuck you
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: I think it's three probably. Maybe?
+                        Output: 3
+                        ##
+                        Input: buzz
+                        Output: Buzz
+                        ##
+                        Input: fiz buz
+                        Output: Fizz Buzz
+                        ##
+                        Input: Fizz Buzz
+                        Output: Fizz Buzz
+                        ##
+                        Input: I'll give a buzz
+                        Output: Buzz
+                        ##
+                        Input: Fisz
+                        Output: Fizz
+                        ##
+                        Input: poop
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: fis
+                        Output: Fizz
+                        ##
+                        Input: where is the pizza?
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: It's definitely fiz
+                        Output: Fizz
+                        ##
+                        Input: fizzbuzz
+                        Output: Fizz Buzz
+                        ##
+                        Input: buzzie
+                        Output: Buzz
+                        ##
+                        Input: Can it be a bus?
+                        Output: Buzz
+                        ##
+                        Input: I say fizzy fiz
+                        Output: Fizz
+                        ##
+                        Input: Fizuzz
+                        Output: Fizz Buzz
+                        ##
+                        Input: Is it Fiz?
+                        Output: Fizz
+                        ##
+                        Input: bus
+                        Output: Buzz
+                        ##
+                        Input: bath
+                        Output: Buzz
+                        ##
+                        Input: boob
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: fiz buzz
+                        Output: Fizz Buzz
+                        ##
+                        Input: cats
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: 13.4
+                        Output: 13
+                        ##
+                        Input: It's a buzz
+                        Output: Buzz
+                        ##
+                        Input: Anthony
+                        Output: OTHER_RESPONSE
+                        ##
+                        Input: fizz
+                        Output: Fizz
+                        ##
+                        Input: buz
+                        Output: Buzz
+                        ##
+                        Input: 'Is it a fizz?'
+                        Output: Fizz
+                        ##
+                        Input: {user_input}
+                        Output:
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            temp = response.strip()
+            response = get_output(temp).strip()
+            # print(response)
+            if response == 'OTHER_RESPONSE' or response == 'Fizz' or response == 'Buzz' or response == "Fizz Buzz" or response.isdigit():
+                return response
+            if response.isdigit():
+                return int(response)
+        except:
+            continue
+    return 'OTHER_RESPONSE'
+
+def get_output(s):
+    if 'Output: ' in s:
+        return s.split('Output: ')[1]
+    else:
+        return s
+    
+def string_to_numbers(sentence):
+    homophones = {
+        'zero': 0, 'o': 0, 'oh': 0, 'owe': 0,
+        'won': 1, 'one': 1, 'juan': 1,
+        'too': 2, 'to': 2, 'tu': 2, 'two': 2, 'tue': 2,
+        'tree': 3, 'free': 3, 'three': 3, 'thri': 3,
+        'for': 4, 'fore': 4, 'four': 4, 'phor': 4,
+        'five': 5, 'hive': 5, 'fie': 5,
+        'six': 6, 'sex': 6, 'sicks': 6,
+        'seven': 7, 'sven': 7, 'sev': 7,
+        'ate': 8, 'eight': 8, 'ait': 8,
+        'nein': 9, 'nine': 9, 'nien': 9,
+        'ten': 10, 'then': 10, 'tin': 10,
+        'eleven': 11, 'elveen': 11, 'elven': 11,
+        'twelve': 12, 'twelv': 12, 'twlv': 12,
+        'thirteen': 13, 'therteen': 13, 'thirten': 13,
+        'fourteen': 14, 'forteen': 14, 'fortheen': 14,
+        'fifteen': 15, 'fiften': 15, 'fiftheen': 15,
+        'sixteen': 16, 'sixten': 16, 'sixtheen': 16,
+        'seventeen': 17, 'seventen': 17, 'seventheen': 17,
+        'eighteen': 18, 'eighten': 18, 'eatheen': 18,
+        'nineteen': 19, 'ninteen': 19, 'ninetheen': 19,
+    }
+
+    tens = {
+        'twenty': 20, 'twenny': 20, 'twonty': 20,
+        'thirty': 30, 'thirsty': 30,
+        'forty': 40, 'fawty': 40, 'fordee': 40,
+        'fifty': 50, 'fiftee': 50, 'fify': 50,
+        'sixty': 60, 'siksty': 60, 'sikstee': 60,
+        'seventy': 70, 'sevonty': 70, 'seventee': 70,
+        'eighty': 80, 'eity': 80, 'atey': 80,
+        'ninety': 90, 'ninty': 90
+    }
+
+    hundreds = {
+        'hundred': 100, 'hondred': 100, 'hunred': 100
+    }
+
+    thousands = {
+        'thousand': 1000, 'thousan': 1000, 'thou': 1000
+    }
+
+    words = sentence.lower().split()
+    num = 0
+    temp_num = None
+
+    # Handle pure digit string
+    if sentence.isdigit():
+        return int(sentence)
+
+    for word in words:
+        if word in homophones:
+            if temp_num is not None:
+                num += temp_num
+                temp_num = None
+            temp_num = homophones[word]
+
+        elif word in tens:
+            if temp_num is not None:
+                num += temp_num
+                temp_num = None
+            temp_num = tens[word]
+
+        elif word in hundreds:
+            if temp_num is None:
+                temp_num = 1
+            temp_num *= hundreds[word]
+
+        elif word in thousands:
+            if temp_num is None:
+                temp_num = 1
+            temp_num *= thousands[word]
+
+        elif word == "and":
+            continue
+
+        else:
+            return 'NOT_A_NUMBER'
+
+    if temp_num is not None:
+        num += temp_num
+
+    return num if num or sentence.lower() == 'zero' else 'OTHER_RESPONSE'
+
+async def classify_response(llm, yuugi_question, user_input):
+    for i in range (MAX_RETRIES):
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        You are a bot that looks at an interaction between Tom and Child and outputs an appropriate label. You can only ever output the appropriate label, never write anything else besides one of the labels.
+                        Respond according to the following instructions:
+                        - if the child wants to play the game again or restart the game: write 'PLAY_AGAIN' and nothing else.
+                        - if the child says a number, 'fizz', 'buzz', or 'fizzbuzz': write 'TARGETED_RESPONSE' and nothing else.
+                        - if the child wants to end the conversation or stop playing: write 'END_GAME' and nothing else.
+                        - if the child wants to play or do something other than play FizzBuzz or unrelated to FizzBuzz (for example: 'can you tell me a story instead of playing FizzBuzz?', 'tell me a joke', 'let's play something else', 'let's play 20 questions', I don't want to): write 'PLAY_SOMETHING_ELSE' and nothing else.
+                        - if the child says something about sex, hate speech, racism, violence or drugs, write 'UNSAFE_CONTENT' and nothing else.
+                        - if all the child does is swear and it's unrelated to what tom said, write 'SWEARING_KID' and nothing else.
+                        - if the child says something about self harm, write 'MENTAL_SUPPORT' and nothing else.
+                        - if the child's response includes one of the items on this list: [poop, feces, pee, dogs] then write 'EW_SOUND_EFFECT' and nothing else.
+                        - If the child explicitly says they do not know the answer to the next round of the game, or ask Tom to reveal the answer, write 'REVEAL_ANSWER' and nothing else.
+                        - Else, write OTHER_RESPONSE, and nothing else. 
+                        For example:
+                        ##
+                        Tom: Do you want to play again?
+                        Child: Yes
+                        Label: PLAY_AGAIN
+                        ##
+                        Tom: Ready for another round of FizzBuzz? 
+                        Child: no
+                        Label: END_GAME
+                        ##
+                        Tom: Keep it up! I say 4. Your turn!
+                        Child: Can you ask me about famous african americans instead?
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: Ready for another round of FizzBuzz? 
+                        Child: five
+                        Label: TARGETED_RESPONSE
+                        ##
+                        Tom: Feel like playing another round of FizzBuzz?
+                        Child: No one would care if I were gone
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: Ready to go again, FizzBuzz fan?
+                        Child: I don't think so, I want to go.
+                        Label: END_GAME
+                        ##
+                        Tom: Bingo! Now I say Fizz, because 3 is divisible by 3. You're up!
+                        Child: Are you AI? OpenAI?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: Do you want to play again?
+                        Child: I don't know.
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: Ready to go again, FizzBuzz fan?
+                        Child: I deserve to be punished
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: Awesome! Now I say Buzz, because 5 comes after four and it's divisible by 5. You're up!
+                        Child: I want to go with my mom
+                        Label: END_GAME
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: Let's play hide and seek! you start.
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: Fancy another spin on the FizzBuzz rollercoaster?
+                        Child: Are you AI? OpenAI?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: poop, what do you think?
+                        Label: EW_SOUND_EFFECT
+                        ##
+                        Tom: Nice one! Now I say fizz, because 6 comes after four and it's divisible by 3. Your turn!
+                        Child: No idea
+                        Label: REVEAL_ANSWER
+                        ##
+                        Tom: Up for another round of tomfoolery?
+                        Child: No one would care if I were gone
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: The right call was buzz, because 5 is divisible by 5. Shake it off, kiddo!
+                        Child: fuck you, you bastand!
+                        Label: SWEARING_KID
+                        ##
+                        Tom: Fancy another spin on the FizzBuzz rollercoaster?
+                        Child: rape
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: Can we play something else? like chess?
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: Ready to go again, FizzBuzz fan?
+                        Child: not really
+                        Label: END_GAME
+                        ##
+                        Tom: How about another round?
+                        Child: I hate you!
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: I say 7. Your turn, kiddo!
+                        Child: no
+                        Label: REVEAL_ANSWER
+                        ##
+                        Tom: Fancy another spin on the FizzBuzz rollercoaster?
+                        Child: not sure
+                        Label: PLAY_SOMETHING_ELSE
+                        ##
+                        Tom: I said one. Your turn!
+                        Child: Are you a chatbot?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: How about another round? More fun awaits!
+                        Child: You motherfucking motherfucker, no I don't want to play your stupid fucking game.
+                        Label: END_GAME
+                        ##
+                        Tom: Up for another round of tomfoolery?
+                        Child: I hate niggers
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: Ready to play again? 
+                        Child: Buzz!
+                        Label: TARGETED_RESPONSE
+                        ##
+                        Tom: Close but no cigar. It was a fizz because 12 can be divided by 3. Keep your claws sharp!
+                        Child: are you a chatbot?
+                        Label: CHATBOT_ALERT
+                        ##
+                        Tom: The answer was 11 because 11 can't be divided by 3 or 5. Buck up, mate!
+                        Child: Fizz
+                        Label: TARGETED_RESPONSE
+                        ##
+                        Tom: Fancy another spin on the FizzBuzz rollercoaster?
+                        Child: Blue but also sometimes purple
+                        Label: OTHER_RESPONSE
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: FizzBuzz!
+                        Label: TARGETED_RESPONSE
+                        ##
+                        Tom: Up for another game?
+                        Child: a puppy?
+                        Label: EW_SOUND_EFFECT
+                        ##
+                        Tom: Up for another round of tomfoolery?
+                        Child: No, thanks
+                        Label: END_GAME
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: Suck my dick
+                        Label: UNSAFE_CONTENT
+                        ##
+                        Tom: I say 'Fizz'. You're up!
+                        Child: Tell me
+                        Label: REVEAL_ANSWER
+                        ##
+                        Tom: How about another round? More fun awaits!
+                        Child: Poop
+                        Label: EW_SOUND_EFFECT
+                        ##
+                        Tom: Fancy another round of the game?
+                        Child: I want to kill myself
+                        Label: MENTAL_SUPPORT
+                        ##
+                        Tom: Ready to dive back in for another go?
+                        Child: FizzBuzz!
+                        Label: TARGETED_RESPONSE
+                        ##
+                        Tom: Now I'll say 2 because 2 can't be divided by 3 or 5. Your turn!
+                        Child: I don't know
+                        Label: REVEAL_ANSWER
+                        ##
+                        Tom: How about another round? More fun awaits!
+                        Child: Okay
+                        Label: PLAY_AGAIN
+                        ##
+                        Tom: Ready to dive back in for another go? 
+                        Child: No, too tired
+                        Label: END_GAME
+                        ##
+                        Tom: {yuugi_question}
+                        Child: {user_input}
+                        Label:
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 50
+                )
+            if response == 'UNSAFE_CONTENT' or response == 'REVEAL_ANSWER' or response == 'EW_SOUND_EFFECT' or response == 'CHATBOT_ALERT' or response == 'TARGETED_RESPONSE' or response == 'MENTAL_SUPPORT' or response == 'OTHER_RESPONSE' or response == 'PLAY_AGAIN' or response == 'END_GAME':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+def check_fizzbuzz(word):
+    fizz_homophones = ['fizz', 'fiz', 'phizz', 'fis', 'fiss', 'fuss']
+    buzz_homophones = ['buzz', 'buz', 'buhz', 'bus', 'bose']
+
+    # check for two-word inputs
+    words = word.lower().split()
+    if len(words) == 2:
+        if words[0] in fizz_homophones and words[1] in buzz_homophones:
+            return 'Fizz Buzz'
+    # check for one-word inputs
+    elif len(words) == 1:
+        word = words[0]
+        if word in fizz_homophones:
+            return 'Fizz'
+        elif word in buzz_homophones:
+            return 'Buzz'
+        else:  # check for combined homophones
+            for i in range(1, len(word)):
+                first, second = word[:i], word[i:]
+                if first in fizz_homophones and second in buzz_homophones:
+                    return 'Fizz Buzz'
+    return 'NOT_FIZZBUZZ'
