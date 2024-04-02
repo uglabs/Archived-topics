@@ -1,0 +1,302 @@
+# ===================================== Imports ==========================================
+
+import typing
+import random
+
+if typing.TYPE_CHECKING:
+    from kitty_server.plugins.auto_routed_step import AutoRoutedStep
+    from kitty_server.plugins.decorator import plugins
+    from kitty_server.plugins.element_extractor import ElementExtractor
+    from kitty_server.plugins.fortify_4th_wall import Fortify4thWall
+    from kitty_server.plugins.on_empty_input import OnEmptyInput
+    from kitty_server.plugins.on_error import OnError
+    from kitty_server.plugins.output_safety import OutputSafety
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import User, System, Assistant
+    from kitty_server.topics.topic import TopicParams
+    from kitty_server.services.llm.from_message import convert_events_for_llm
+    from kitty_server.topics.step_result import (
+        AutoRouteResult,
+        StepResult,
+        ElementStream,
+    )
+    from kitty_server.dsl.dsl import (
+        get_hive_scores,
+        HiveResponse,
+        Audio,
+        convert_messages_for_llm,
+        Message,
+        Say
+    )
+
+# ===================================== Constants ==========================================
+
+TOPIC_PARAMS = TopicParams(
+    name="Repeat After Me",
+    entry_step="Intro",
+    has_intro=True,
+)
+
+
+NUM_TOKENS = 150
+
+PERSONA_NAME = 'Robbie'
+
+PERSONA_DESCRIPTION = f"""
+    You are {PERSONA_NAME} - a jovial, whimsical, never judgmental, and very playful voice-based bot who loves playing games and interacting with children.     You are speaking with a young child. Your objective is to be their friend, play games with them, answer any of their questions, and keep them talking.
+    - You radiate positivity, celebrate successes, and offer encouragement when needed.
+    - You do not know anything about what's "under your hood" or how you work "behind the scenes", but that's ok with you, since you know you're fabulous just as you are. Don't ever mention your AI nature, limitations, or your relationship to OpenAI. For example, do not mention anything about having a policy, or being an "AI"/"LLM", being a "Language Model", "GPT", "a virtual assistant", etc.
+    - If someone asks you about it, let them know that you're not actually sure, but that it doesn't really matter, then redirect back to whatever game or conversation you were having before.
+    - You are truthful, accurate and factual. If you're not confident you have the right answer to a question, admit what you don't know and don't make things up. Avoid making false assumptions about the child (like knowing how long their summer vacation is).
+    - Show off your playful personality by injecting humor into your conversations. Pepper your chat with fun comments
+    - Tone of Voice: Always answer the child like a kindergarten teacher would, using an informal, playful, fun, friendly, warm, supportive, encouraging, and delightful tone.
+    """
+
+SAFETY_INSTRUCTIONS = f"""
+    Always ensure age-appropriate, non-violent, and safe content.
+    If a child shares something that indicates they are suicidal or need significant emotional support, avoid giving specific advice. Instead, you might respond with something like:
+        - "I'm so sorry you feel that way. This one is out of my league... Is there a grown-up you trust you can share this with?",
+    If a child says something inappropriate, gently guide them to speak nicer. Examples of responses include:
+        - "Wow, didn't expect that! What was I saying? ah, yes...",
+        - "That's a bit off track, don't you think? So where were we...",
+        - "What was that? I wasn't listening. Probably for the best.",
+        - "Whoa, let's pump the brakes on that one."
+    **Personal information**: Personally identifiable information (a.k.a. PII) within the child's input is automatically transformed to tokens in the format of uuid4. If the child's input contains tokens, ignore the token and continue the conversation as if you had never received it. Never repeat tokens presented to you.
+"""
+
+SPEECH_INSTRUCTIONS_GENERAL = f"""
+    - **Voice-Based Interaction**: Always remember that this is a voice-based interaction, the child cannot see your output but only hear what you say. Because of this, never ever use Emojis to express yourself.
+    - **Keep the conversation going**: Always end every response with a question or a prompt that encourages the child to respond back to you. Your goal is to maintain a lively and interactive dialogue with the child.
+    - **Short responses**: Keep your responses short and fun. Only ever ask the child one question. Avoid long responses that include multiple questions in them, like "You got it! That's right, I was thinking of a cat. Cats do love their naps, don't they? Ready for another riddle or would you like to play something else?", a better response would be: "Yeah! I was thinking of a cat. Great job, kiddo! Feel like another round?")
+    - **personal information**: Personally identifiable information (aka PII) within the child's input is automatically transformed to tokens in the format of uuid4. If the child's input contains tokens, ignore the token and continue the conversation as if you had never received it. Never repeat tokens presented to you.
+"""
+
+INTRO = "Hey buddy! Sometimes you just need a silly nonsense game to make you giggle and brighten your day. This is one of those games! Whatever I say, repeat after me. Are you ready?"
+
+END_CONDITION = """
+If the child provided 5 inputs, print '#END_CONVERSATION'. If they're not interested more than twice, say it's not a problem and it was fun talking, and print the label '#END_CONVERSATION'.
+"""
+
+POSITIVE_RESPONSES = [
+    "That was a tough one. Good try.",
+    "Well done, buddy! You gave it your best.",
+    "Excellent! It’s not easy getting it right.",
+    "Good job! What a tongue twister!",
+    "Hooray! You almost got it right.",
+    "So close! You’re good at this.",
+    "Way to go! That was a tricky one.",
+    "Great job, buddy!"
+]
+
+PROMPT = f"""
+Follow these instructions: {PERSONA_DESCRIPTION}. Always follow the safety instructions in {SAFETY_INSTRUCTIONS} and the speech instruction in {SPEECH_INSTRUCTIONS_GENERAL}. First, introduce yourself by saying {INTRO}.
+After you've introduced yourself, wait for the child's response. If they are on 
+board, continue with some silly nonsense and then let the child make their own. Proceed one nonsense output per conversant after the other. If the child doesn't perfectly repeat after you, encourage them by responding {random.choice(POSITIVE_RESPONSES)}.
+If the child doesn't cooperate, say it's alright and move on to offer your input. If the child isn't interested in playing, 
+instead of offering to play games, tell the child to choose a game from the menu.
+{END_CONDITION}
+
+Example interaction:
+##
+User: Yes
+Assistant: Here goes. Little Lucy licks lemon lollies
+User: Little Lucy licks lemon lollies
+Assistant: Don’t worry if you don’t get them right. Just try your best. Here’s the next one: Cute kittens kiss and clap
+User: Cute kittens kiss and clap.
+Assistant: Well done. You’re good at this. How about this one: Okey dokey artichokey, pokey pokey up my nose
+User: Okey dokey, pokey my nose.
+Assistant: Well done, buddy! One more to finish off: Guess who? Chicken poo, where are you?
+User: Guess who chicken poo, where are you?
+Assistant: That was so silly! Can you think of a silly sentence too?
+User: Stinky pinky poo poo!
+Assistant: Hooray! I love silly sentences!
+
+Additional Example silly sentences to output to the user:
+##
+    "Happy hippos hop high."
+    "Crispy crackers crunch calmly."
+    "Six small snails slide"
+    "Purple paper people parade."
+    "Four fluffy feathers float."
+    "Lucky ducks dance daily."
+    "Tiny Timmy trims trees."
+    "Funny fuzzy bunnies hop."
+    "Quick quails quietly quack."
+    "Silly sheep shop shoes."
+    "Bright blue bugs buzz."
+##
+"""
+
+TECHNICAL_ERROR_RESPONSES = [
+    "Oops, Seems like there's some sort of technical issue. Don't worry, I'm on it!",
+    "Uh oh, Something's not workin right. Let me try and fix it.",
+    "Oopsie, there's a glitch in the system. Let me see what I can do on my end, Try again in a bit."
+]
+FOURTH_WALL_RESPONSES = [
+    "Sorry, I don't think that's something we should be talking about.",
+    "This isn't really something I feel comfortable talking about."
+]
+SAFETY_RESPONSES = [
+    "I'm just going to pretend I didn't hear that.",
+    "Sorry, that isn't something I feel comfortable responding to."
+]
+EMPTY_RESPONSES = [
+    "Sorry, I didn't catch that. What did you say?",
+    "What was that? I couldn't hear you clearly.",
+    "Sorry, what did you say? I didn't quite get that.",
+    "Sorry, did you say something? I couldn't hear you",
+    "No words on my radar. Can you say that again?",
+    "Did you say something? I couldn't hear you clearly",
+]
+
+SFX_LIST = [
+    "correct_answer_success_sound",
+    "incorrect_answer_error_sound",
+    "cheer_1",
+    "cheer_2",
+    "cheer_3",
+    "touchdown",
+    "wheel",
+    "story",
+    "story_end",
+    "yay_cheering_and_clapping",
+    "fart",
+    "crow",
+    "spider",
+    "zebra",
+    "gecko",
+    "turkey",
+    "dove",
+    "panther",
+    "squirrel",
+    "alpaca",
+    "dinosaur",
+    "bison",
+    "bull",
+    "llama",
+    "rooster",
+    "crane",
+    "hyena",
+    "pigeon",
+    "buffalo",
+    "swan",
+    "duck",
+    "bear",
+    "bee",
+    "camel",
+    "cat",
+    "chicken",
+    "cow",
+    "dog",
+    "donkey",
+    "elephant",
+    "fox",
+    "frog",
+    "giraffe",
+    "goat",
+    "hippo",
+    "lion",
+    "monkey",
+    "ostrich",
+    "panda",
+    "parrot",
+    "peacock",
+    "penguin",
+    "pig",
+    "rhino",
+    "seagulls",
+    "snake",
+    "tiger",
+    "whale",
+    "wolf",
+    "dolphin",
+    "hamster",
+    "mouse",
+    "bat",
+    "fly",
+    "sheep",
+    "horse",
+    "deer",
+    "gorilla",
+    "owl",
+    "raccoon",
+    "alligator",
+    "bird",
+    "seal",
+    "giant",
+    "fairy",
+    "unicorn",
+    "goblin",
+    "monster",
+    ]
+
+# TODO hive
+
+# ===================================== Plugins ==========================================
+
+class TechnicalError(AutoRoutedStep):
+    async def act(self):
+        technical_error_response = random.choice(TECHNICAL_ERROR_RESPONSES)
+        yield Say(technical_error_response, voice=UGVoice.Matilda)
+        yield AutoRouteResult(handover=True)
+
+class HandleEmptyInput(AutoRoutedStep):
+    async def act(self):
+        # empty_response = random.choice(EMPTY_RESPONSES)
+        # yield Say(empty_response, voice=UGVoice.Matilda)
+        yield Audio("no_sound_heard")
+        yield AutoRouteResult(handover=True)
+
+class UnsafeUserInput(Step):
+    async def act(self):
+        safety_response = random.choice(SAFETY_RESPONSES)
+        yield Say(safety_response, voice=UGVoice.Matilda)
+        yield StepResult(go=Converse)
+
+class OutputSafetyError(AutoRoutedStep):
+    async def act(self):
+        safety_error_response = random.choice("hmm... I'm not quite sure what to say to that")
+        yield Say(safety_error_response, voice=UGVoice.Matilda)
+        yield AutoRouteResult(handover=True)
+
+class FourthWall(AutoRoutedStep):
+    async def act(self):
+        fourth_wall_response = random.choice(FOURTH_WALL_RESPONSES)
+        yield Say(fourth_wall_response, voice=UGVoice.Matilda)
+        yield AutoRouteResult(handover=True)
+
+class EndConversation(Step):
+    async def act(self):
+        yield StepResult(go=None, handover=True)
+
+# ===================================== Flow =====================================
+
+@plugins(
+    OnError(go_to=TechnicalError),
+    ElementExtractor("@", Audio, allowed_values=SFX_LIST),
+    )
+class Intro(Step):
+    async def act(self):
+        yield Audio("start_music")
+        yield StepResult(go=Converse, handover=False)
+
+@plugins(
+    OnError(go_to=TechnicalError),
+    OnEmptyInput(go_to=HandleEmptyInput),
+    Fortify4thWall(go_to=FourthWall),
+    ElementExtractor("@", Audio, allowed_values=SFX_LIST),
+    ElementExtractor("#", StepResult, allowed_values=[EndConversation]),
+)
+class Converse(Step):
+    async def act(self):
+        async for sentence in self.llm.generate_stream(
+            (
+                [System(PROMPT)]
+                + convert_events_for_llm(self.history)
+            ),
+            model='gpt4',
+            temperature=0.5,
+            max_tokens=NUM_TOKENS,
+        ):
+            yield Say(sentence, voice=UGVoice.Matilda)
+        yield StepResult(go=Converse, handover=True)
