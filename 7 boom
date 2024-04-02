@@ -1,0 +1,74 @@
+#
+# poetry run topic_checker topic_content/topic_7boom.py Intro ""
+#
+import typing
+
+if typing.TYPE_CHECKING:
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.output import Audio, Say, Ssml
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Seven Boom",
+    entry_step="Intro",
+    has_intro=True,
+)
+
+
+numbers = {}
+# utilities
+
+prompts = [
+    "write the homophone of the relevant part in the sentence '{textual_number}' as its corresponding number in no more than one word as an integer and write nothing else"
+]
+
+
+async def fetch_number(llm, textual_number):
+    response = await llm.generate(
+        [
+            User(
+                f"""write the homophone "{textual_number}" as its corresponding number and nothing else. 
+                output:
+                """
+            ),
+        ],
+        temperature=0,
+        max_tokens=20,
+    )
+    return response
+
+
+## steps
+class Intro(Step):
+    """This step just checks the length and sends the user forward."""
+
+    async def act(self):
+        self.output(Say("Let's do seven boom!"))
+        return StepResult(go=Step1)
+
+
+class Step1(Step):
+    async def act(self):
+        self.output(Say("Let me start, give me a number!"))
+        return StepResult(go=Loop, handover=True)
+
+
+class Loop(Step):
+    async def act(self):
+        """this function takes the input from the user and adds 1 to it"""
+
+        number_candidate = await fetch_number(llm=self.llm, textual_number=self.user_message.text)
+
+        try:
+            number = int(number_candidate)
+        except ValueError:
+            raise ValueError("Not a number")  # crash program
+        except Exception as e:
+            pass  # do
+
+        if "last_number" not in self.session or number == self.session["last_number"] + 1:
+            number += 1
+            self.session["last_number"] = number
+            self.output(Say(f"{number}"))
+            return StepResult(go=Loop, handover=True)
