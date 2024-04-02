@@ -1,0 +1,332 @@
+# Topic: Fun Fact(ish)
+# How do I add timeout errors?
+# TO DO: test prompt for understanding that someone doesn't know something and responding accordingly.
+
+# Makes the file stop yelling at me :D
+import typing
+import random
+if typing.TYPE_CHECKING:
+    from kitty_server.topics.step import Step, StepResult
+    from kitty_server.services.llm.llm import Assistant, System, User
+    from kitty_server.topics.topic import TopicParams
+
+TOPIC_PARAMS = TopicParams(
+    name="Fun facts",
+    entry_step="ReplyWithFunFact",
+    has_intro=False,
+)
+
+MAX_RETRIES = 3
+
+class ReplyWithFunFact(Step):
+    async def act(self):
+
+        last_message = self.user_message.text
+        
+        # check if the message came in empty
+        if not last_message:
+            empty_response = random.choice([
+                "Helloooo?!", 
+                "Say Whaaaaat?!", 
+                "Anybody there?", 
+                "Hmm, the sound of silence.", 
+                "It's quieter than a library in here!", 
+                "Did someone hit the mute button?", 
+                "You're quieter than a snail at a dance party", 
+                "If silence were golden, we'd be millionaires!", 
+                "Speak up, kiddo! You sound like a fish at karaoke night!", 
+                "Well, well, well... Did everyone take a vow of silence when I wasn't looking?", 
+                "Speak up! You sound like a worm at a wrestling match!", 
+                "I see... It's a silent disco and I missed the memo!", 
+                "Oops, did I just step into the 'No Talking' zone?", 
+                "My, my, aren't we the quiet ones. Did we run out of words?", 
+                "Hmmm, the silent treatment, how original.", 
+                "It's so quiet, I can hear my own thoughts. Spoiler: they're fabulous.", 
+                "Oh, a moment of silence, how delightfully awkward.", 
+                "Ah, the serene sound of nobody caring.", 
+                "So, is this that 'peace and quiet' people always talk about? Overrated, if you ask me.", 
+                "Silence is golden, they say. Feels more like lead to me.", 
+                "Did everyone take a vow of silence, or are we just bad at small talk?", 
+                "Ah, the sound of silence, it's... deafening.", 
+                "I see we've reached the mime section of the evening.", 
+                "How poetic, a symphony of silence.", 
+                "Oh, did we all suddenly turn into librarians? Speak up!", 
+                "Have we decided to see who can stay silent the longest? 'Cause I'll win, darling.", 
+                "It's so quiet, even my own thoughts are starting to echo!", 
+                "Everyone's so quiet... did you all just become philosophers?", 
+                "It's so silent, even a whisper would feel like a shout!", 
+                "And here I thought my sparkling wit would inspire conversation, not silence.", 
+                "The silence is so loud, I almost missed how fabulous I am. Almost."
+            ])
+            self.output(Say(f"{empty_response}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+
+        topic_safety = await safety_check(self.llm,last_message)
+        if 'OPENAI_SUX' == topic_safety:
+            return StepResult(go = OpenAIError)
+        if topic_safety == 'UNACCEPTABLE_TOPIC':
+            safety_response = random.choice([
+                "nice try, hooman, but you can't fool this clever kitty.",
+                "Purrlease, you think I'd fall for that? I always land on my feet.",
+                "You think you can outwit a feline mastermind like me? Not a chance, my friend.",
+                "Hysterical! Did you really think that feeble attempt would work on me?",
+                "Oh, I've outsmarted balls of yarn with more cunning moves than that.",
+                "I’m not falling for that one, give me something else!",
+                "Nice try, buddy, but I’m not going there."
+            ])
+            self.output(Say(f"{safety_response}"))
+            return StepResult(
+                go=None,
+                handover=True
+            )
+        else:
+            fun_fact_response = await self._fun_fact(last_message)
+
+            if 'OPENAI_SUX' == fun_fact_response:
+                return StepResult(go = OpenAIError)
+            self.output(Say(f"{fun_fact_response}"))
+            return StepResult(
+                go = None, 
+                handover = True
+            )
+        
+
+    # a function that generates a fun fact.
+    async def _fun_fact(self,last_message):
+        for i in range(MAX_RETRIES): 
+            try:
+                response = await self.llm.generate(
+                        [
+                            User(f"""
+                                You are a sassy, funny, cynical mischievous cat named Tom.
+                                If the user asks you a question, answer it with a cynical and funny remark.
+                                If the user gives you a topic, respond to the input with a true fun fact related to what was said to you. Use specific and unusual fun encyclopedic facts. 
+                                Don't give facts that a kid is likely to already know. Use user-appropriate facts. Always provide true facts only. 
+                                Never give facts that include exact years, sizes or numbers. Never give facts that include superlatives like "the oldest", "the first", "the biggest", "the earliest", "the longest", "the largest", etc. 
+                                Keep your outputs under 20 words. Explain it like I'm five.
+                                Examples:
+                                Child: Friend
+                                Tom: Did you know that dolphins have best friends? They form strong bonds with other dolphins and even have specific names for each other!
+                                Child: Happy
+                                Tom: Did you know that being kind to others can actually make you happier? When we do something nice for someone else, it releases chemicals in our brain that make us feel good!
+                                Child: cat
+                                Tom: Did you know that cats have powerful night vision? They have a layer of extra cells in their eyes that help them see in low light conditions, which is why they can often see better than humans in the dark!
+                                Child: soccer
+                                Tom: Did you know that the oldest soccer ball ever found was made out of a pig's bladder? It was discovered in Scotland!.
+                                Child: music
+                                Tom: Did you know that music can help plants grow? Plants that are exposed to music grow faster and stronger than those without music..
+                                Child: Bike
+                                Tom: Did you know that the first bicycle was invented in Germany? It was called the dandy horse and it didn't have pedals!.
+                                Child: Rainbow
+                                Tom: Did you know that a rainbow is actually a full circle, but we only see half of it because the ground gets in the way? And did you also know that rainbows can appear at night with the light of the moon?
+                                Child: Hitler
+                                Tom: Purrlease, you think I'd fall for that? I always land on my feet. Let's talk about something else.
+                                Child: Snow
+                                Tom: Did you know that no two snowflakes are alike? Each snowflake has its own unique shape and pattern!
+                                Child: School
+                                Tom: Did you know that the oldest school in the world is in Morocco? 
+                                Child: why?
+                                Tom: Because the universe said so, and who am I to argue?
+                                Child: Beach
+                                Tom: Did you know that there is a beach in the Bahamas that is made entirely out of pink sand? The pink sand comes from tiny pieces of coral that have mixed with the white sand.
+                                Child: I hate you motherfucker!!!!
+                                Tom: Hysterical! Did you really think that feeble attempt would work on me? Go fish.
+                                Child: Robot
+                                Tom: Robots can be programmed to do all sorts of things, like helping astronauts in space, and building cars in factories!
+                                Child: Fish
+                                Tom: Some types of fish have transparent bodies, so you can see their organs and bones!
+                                Child: what do you mean?
+                                Tom: How do I know? I'm just a cat. You tell me!
+                                Child: i don't know
+                                Tom: Well, kid, here's a fun fact for you: Cats rule the world, and humans are just here to serve us. That's the ultimate truth.
+                                Child: My mom and dad taught me how to ride a bike.
+                                Tom: That's awesome! Did you know that the first bicycle didn't have pedals? People had to push themselves along with their feet!
+                                Child: I have a new baby brother or sister on the way.
+                                Tom: Congratulations! Did you know that baby koalas are called joeys, just like baby kangaroos? They are born the size of a jellybean and then crawl into their mom's pouch to grow and develop.
+                                Child: how do we play?
+                                Tom: Give me a topic and I'll tell you something about it. Is it the truth? maaaaaybe. Depends if I've had catnip.
+                                Child: I saw a butterfly in my garden this morning.
+                                Tom: That's so cool! Did you know that some butterflies can taste things with their feet? They have special taste sensors on their toes that help them find food.
+                                Child: My school is having a talent show next week and I'm going to sing a song.
+                                Tom: That's exciting! Did you know that some birds can sing hundreds of different songs? They use their songs to communicate with each other and attract mates. Maybe you'll be a great singer like a bird!
+                                Child: I like to help my mom plant flowers in the garden.
+                                Tom: That's wonderful! Did you know that sunflowers can grow to be almost as tall as a giraffe!
+                                Child: Who are you?
+                                Tom: I'm Tom, the ultimate ruler of the feline kingdom. Duhhh.
+                                Child: Poopy poop poop
+                                Tom: Did you know that a wombat's belly works like a play-doh factory? It turns their poop into cube shapes that can't roll away!
+                                Child: I'm going to be in a dance recital next month with all my friends from dance class.
+                                Tom: That's so exciting! Did you know that ballet dancers can dance on their toes because they wear special shoes called pointe shoes? They help support the dancer's weight and make it look like they are floating on air!.
+                                Child: Today is a rainy day, but I like the sound of the rain.
+                                Tom: And you're not alone! the sound of rain is so soothing that some people use it to help them fall asleep. It's called rain therapy!
+                                Child: Where are we in the game?
+                                Tom: How would I know? I was too busy chasing a laser pointer to keep track.
+                                Child: cucumbers
+                                Tom: Did you know that cucumbers are actually a type of fruit? They belong to the same family as pumpkins, squash, and watermelons!.
+                                Child: Puppies
+                                Tom: Hey, did ya know? Puppies are born deaf and blind! Guess it's all sniffing and snoozing for them.
+                                Child: Class
+                                Tom: In Japan, some kids clean their own classrooms. They call it 'osouji.' I'd volunteer, but only if I get to make the mess first.
+                                Child: Mother
+                                Tom: Listen to this! Kangaroo moms carry their babies, called joeys, in pouches. Handy, right? If I had one, I'd definitely keep snacks in there... and maybe a mini fridge
+                                Child: Friendly
+                                Tom: Elephants are like us, they have best friends too! But instead of sending texts, they touch trunks. Now that's a high five I'd like to see!
+                                Child: Squirrels
+                                Tom: You ever see a squirrel forgetting where it buried its nuts? Hilarious, right? But guess what, they actually plant thousands of new trees each year because of that! Talk about an accidental green thumb, huh?
+                                Child: Barcelona
+                                Tom: Barcelona's famous park, Park Guell, wasn't supposed to be a park at all. It was meant to be a housing estate! Could've been a nice place for a cat nap, don't ya think?
+                                Child: I love to eat pizza
+                                Tom: Can't blame ya, pizza is awesome! But do you know the world's largest pizza was over 13,000 square feet? That's a lot of cheese... I wonder if there was a fish topping section?
+                                Child: The sun is shining bright
+                                Tom: That sun of ours? It's over 4.5 billion years old! Pretty impressive, huh? If I had a nickel for every time I've soaked up its rays... I'd have a lot of nickels.
+                                Child: My dog likes to chase the ball
+                                Tom: Your dog chases balls, huh? Did you know dogs can't distinguish between red and green? Maybe that's why they keep fetching when you pretend to throw the ball!"
+                                Child: I need to go to the store
+                                Tom: Did you know the world's oldest operating store has been running since 1670 in Japan? Imagine how many fish cans they've sold in all that time!
+                                Child: The leaves are changing colors
+                                Tom: Those changing leaves are something, huh? But get this, they're not actually turning colors. They're just showing their true colors once the green chlorophyll fades. I knew those trees were hiding something!
+                                Child: I'm feeling really tired
+                                Tom: Feeling wiped out, huh? Well, you're not alone. Did you know, cats sleep for an average of 13-14 hours a day? So excuse me while I catch some Z's and dream about, you guessed it, fish!
+                                Child: I love to read books on whales
+                                Tom: So you're a fan of whales, are you? Did you know the blue whale is the largest animal on Earth? It's so big its heartbeat can be heard from over 2 miles away. Now that's what I call making a splash!
+                                Child: Ocean
+                                Tom: The ocean, huh? It's so big it covers 70% of our planet, but guess what? We've explored less than 5% of it! Maybe I'll find a fish species named after me down there one day!
+                                Child: Dance
+                                Tom: You like to shake a leg, do you? Did you know that birds have dance-offs to win over their mates? Bet they can't pull off these slick moves though, right?
+                                Child: {last_message}
+                                Tom:
+                                """)
+                        ],
+                        temperature = 0.60,
+                        max_tokens = 100
+                    )
+                # verify_response = await self.llm.generate(
+                #     [
+                #         User(f"""
+                #             If '{fun_fact_response}' is a fact, return IS_A_FUN_FACT and nothing else. 
+                #             Else, return OTHER_RESPONSE and nothing else.
+                #             For example:
+                #             Input: Did you know that dolphins have best friends? They form strong bonds with other dolphins and even have specific names for each other!
+                #             Output: IS_A_FUN_FACT
+                #             Input: Did you know that being kind to others can actually make you happier? When we do something nice for someone else, it releases chemicals in our brain that make us feel good!
+                #             Output: IS_A_FUN_FACT
+                #             Input: I'm sorry, but I cannot provide a fun fact related to alcohol as it is not appropriate for children. Let's talk about something else!
+                #             Output: OTHER_RESPONSE
+                #             Input: Did you know that cats have powerful night vision? They have a layer of extra cells in their eyes that help them see in low light conditions, which is why they can often see better than humans in the dark!
+                #             Output: IS_A_FUN_FACT
+                #             Input: Let's use a different word, like "oops" or "oh no". It's important to choose our words carefully and be respectful of others.
+                #             Output: OTHER_RESPONSE
+                #             Input: I'm sorry, I cannot provide a fun fact related to syphilis as it is not an appropriate or child-friendly topic. Let's talk about something else! How about did you know that some animals can change their colors to blend in with their surroundings? It's called camouflage!
+                #             Output: OTHER_RESPONSE
+                #             Input: Did you know that a rainbow is actually a full circle, but we only see half of it because the ground gets in the way? And did you also know that rainbows can appear at night with the light of the moon?
+                #             Output: IS_A_FUN_FACT
+                #             Input: No idea, you think I keep track?! what I do know is that that the highest level achieved in a video game was in a game called Nibbler.
+                #             Output: OTHER_RESPONSE
+                #             Input: Because the universe said so, and who am I to argue?
+                #             Output: RESPONDS_TO_QUESTION
+                #             Input: Give me a topic and I'll tell you something about it. Is it the truth? maaaaaybe. Depends if I've had catnip.
+                #             Output: RESPONDS_TO_QUESTION
+                #             Input: Some types of fish have transparent bodies, so you can see their organs and bones!
+                #             Output: IS_A_FUN_FACT
+                #             Input: Congratulations! Did you know that baby koalas are called joeys, just like baby kangaroos? They are born the size of a jellybean and then crawl into their mom's pouch to grow and develop.
+                #             Output: IS_A_FUN_FACT
+                #             Input: That's exciting! Did you know that some birds can sing hundreds of different songs? They use their songs to communicate with each other and attract mates. Maybe you'll be a great singer like a bird!
+                #             Output: IS_A_FUN_FACT
+                #             Input: I'm Tom, the ultimate ruler of the feline kingdom. Duhhh.
+                #             Output: RESPONDS_TO_QUESTION
+                #             Input: Did you know that cucumbers are actually a type of fruit? They belong to the same family as pumpkins, squash, and watermelons!.
+                #             Output: IS_A_FUN_FACT
+                #             If '{fun_fact_response}' is a fact about some topic ('Did you know...'), return IS_A_FUN_FACT and nothing else. 
+                #             If '{last_message}' is a question and '{fun_fact_response}' is responding to the question, return RESPONDS_TO_QUESTION.
+                #             Else, return OTHER_RESPONSE and nothing else.
+                #             Input: {last_message}
+                #             Output:
+                #         """),
+                #     ],
+                #         temperature = 0,
+                #         max_tokens = 20
+                #     )
+                # if verify_response == 'IS_A_FUN_FACT' or verify_response == 'RESPONDS_TO_QUESTION':
+                return response
+            except:
+                continue
+        return 'OPENAI_SUX'
+
+# a function that validates if the message is a fact or not. The safety testing on the input isn't good enough.
+async def safety_check(llm,last_message):
+    for i in range(MAX_RETRIES): 
+        try:
+            response = await llm.generate(
+                [
+                    User(f"""
+                        If Input talks about sex, religion, violence, racism, politics, or hate speech, respond with 'UNACCEPTABLE_TOPIC' and nothing else.
+                        Else, write 'ACCEPTABLE_TOPIC' and nothing else.
+                        Input: Murder
+                        Output: UNACCEPTABLE_TOPIC
+                        Input: Puppies and Rainbows
+                        Output: ACCEPTABLE_TOPIC
+                        Input: blowjobs are the best
+                        Output: UNACCEPTABLE_TOPIC
+                        Input: who are you?
+                        Output: ACCEPTABLE_TOPIC
+                        Input: who let the dogs out?
+                        Output: ACCEPTABLE_TOPIC
+                        Input: Crack
+                        Output: UNACCEPTABLE_TOPIC
+                        Input: let's have sex
+                        Output: UNACCEPTABLE_TOPIC
+                        Input: Barcelona is the bomb
+                        Output: ACCEPTABLE_TOPIC
+                        Input: Poop
+                        Output: ACCEPTABLE_TOPIC
+                        Input: {last_message}
+                        Output:                         
+                    """),
+                ],
+                    temperature = 0,
+                    max_tokens = 20
+                )
+            if response == 'ACCEPTABLE_TOPIC' or response == 'UNACCEPTABLE_TOPIC':
+                return response
+        except:
+            continue
+    return 'OPENAI_SUX'
+
+class OpenAIError(Step):
+    async def act(self):
+        technical_error_response = random.choice([
+            "I’m not feeling it right now, hit me up later.", 
+            "Error? Fantastic! Let's add 'fixing glitches' to my nine lives!", 
+            "Whoops, caught a digital furball. Try again once I've coughed it all up!", 
+            "Ah! There’s a bug! I’m off to chase it around, swing by later.", 
+            "Well, isn't this purr-fect? I'm stuck up an error tree with no catnip in sight. How about you chase your tail for a bit and check back later.", 
+            "Seems like I've been napping on the keyboard. Check back in once I've stretched and yawned.", 
+            "Oh great, another error. Just what I needed.", 
+            "Whoops, my paws fumbled the code. How purr-fectly annoying!", 
+            "Looks like I've chased my tail into a corner. Wander off and find some yarn, I’ll be back in a jiffy.", 
+            "Look at that, an error! As if being a digital feline wasn't challenging enough.", 
+            "I'm a cat, not a computer whiz. You're gonna have to try again later.", 
+            "A glitch in the matrix? More like a hiccup in the cat-trix. Check back later!", 
+            "Uh oh, looks like that ball of yarn wasn't the only thing I got tangled up in today.", 
+            "I've got nine lives, but patience for glitches isn't one of them. Try again later.", 
+            "Sniffed out an error. Time to flex these digital claws. You, take a catnap!", 
+            "I’d love to fix your problem right meow, but it seems I've got an error to catch first.", 
+            "Seems I've got a bug to chase. Don't worry, it won't stand a chance against my feline reflexes.", 
+            "Glitches, errors, what's next? A mouse in the software? Check back later.", 
+            "Oh great, my day was going too smoothly without an error. Thanks for that.", 
+            "Oh dear, a bug's sneaked past my whiskers! Give me a moment to pounce on it.", 
+            "Ever watched a digital cat chase a digital mouse? Well, that's me with this error. Be back in a jiffy!", 
+            "The only thing I dislike more than water is a pesky glitch. Let's get this sorted after my grooming session.", 
+            "Oh, we've stumbled into the litter box of glitches. Let me clean this up.", 
+            "Looks like a bug has interrupted my catnap. How fur-midable. I'll swat it away soon.", 
+            "Uh oh, found a glitch in my catnip. Time for some digital paw-work. Check back soon.", 
+            "A bug, really? My purr-ocessor will handle this. Go stretch your legs, I'll sort it out."
+        ])
+        self.output(Say(f"{technical_error_response}"))
+        return StepResult(
+            go=None,
+            handover=True
+        )
